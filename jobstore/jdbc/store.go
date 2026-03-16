@@ -124,7 +124,6 @@ func splitStatements(ddl string) []string {
 // SaveJob persists or updates a job definition.
 func (s *Store) SaveJob(ctx context.Context, job *scheduler.JobRecord) error {
 	query := s.dialect.UpsertJobSQL(s.jobsTable())
-	meta := serializeMetadata(job.Metadata)
 	now := time.Now()
 
 	_, err := s.db.ExecContext(ctx, query,
@@ -132,7 +131,6 @@ func (s *Store) SaveJob(ctx context.Context, job *scheduler.JobRecord) error {
 		job.Name,
 		job.TriggerType,
 		job.TriggerValue,
-		meta,
 		job.NextFireTime,
 		scheduler.StateWaiting,
 		job.Enabled,
@@ -338,11 +336,11 @@ type scanner interface {
 
 func (*Store) scanJob(sc scanner) (*scheduler.JobRecord, error) {
 	var rec scheduler.JobRecord
-	var id, meta string
+	var id string
 	var instanceID sql.NullString
 	var acquiredAt sql.NullTime
 	err := sc.Scan(&id, &rec.Name, &rec.TriggerType, &rec.TriggerValue,
-		&meta, &rec.NextFireTime, &rec.State, &instanceID, &acquiredAt, &rec.Enabled,
+		&rec.NextFireTime, &rec.State, &instanceID, &acquiredAt, &rec.Enabled,
 		&rec.CreatedAt, &rec.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -350,6 +348,5 @@ func (*Store) scanJob(sc scanner) (*scheduler.JobRecord, error) {
 	rec.ID = scheduler.JobID(id)
 	rec.InstanceID = instanceID.String
 	rec.AcquiredAt = acquiredAt.Time
-	rec.Metadata = deserializeMetadata(meta)
 	return &rec, nil
 }

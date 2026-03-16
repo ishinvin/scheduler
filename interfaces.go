@@ -63,7 +63,6 @@ type JobRecord struct {
 	Name         string
 	TriggerType  string // "cron", "once", "interval"
 	TriggerValue string // cron expr, RFC3339 time, or duration string
-	Metadata     map[string]string
 	NextFireTime time.Time
 	State        string // WAITING, ACQUIRED, COMPLETE
 	InstanceID   string // which instance owns it (when ACQUIRED)

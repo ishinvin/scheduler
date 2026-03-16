@@ -1,7 +1,6 @@
 package jdbc
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -108,27 +107,6 @@ func recoverStaleJobsSQL(d Dialect, table string) string {
 		d.Col("updated_at"), d.Placeholder(2),
 		d.Col("state"), d.Placeholder(3),
 		d.Col("acquired_at"), d.Placeholder(4)) //nolint:mnd // placeholder index
-}
-
-// --- Metadata serialization (JSON, shared by all dialects) ---
-
-const emptyJSON = "{}"
-
-func serializeMetadata(m map[string]string) string {
-	if m == nil {
-		return emptyJSON
-	}
-	b, _ := json.Marshal(m)
-	return string(b)
-}
-
-func deserializeMetadata(s string) map[string]string {
-	if s == "" || s == emptyJSON {
-		return nil
-	}
-	var m map[string]string
-	_ = json.Unmarshal([]byte(s), &m)
-	return m
 }
 
 // containsString checks if an error message contains a substring.

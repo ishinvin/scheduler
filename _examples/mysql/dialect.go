@@ -6,7 +6,7 @@ import (
 )
 
 // mysqlColumns is the column list for MySQL SELECT queries.
-const mysqlColumns = `job_id, name, trigger_type, trigger_value, metadata,
+const mysqlColumns = `job_id, name, trigger_type, trigger_value,
 		        next_fire_time, state, instance_id, acquired_at, enabled, created_at, updated_at`
 
 // MySQL implements jdbc.Dialect for MySQL / MariaDB.
@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS ` + prefix + `scheduler_jobs (
     name           VARCHAR(512) NOT NULL,
     trigger_type   VARCHAR(32)  NOT NULL,
     trigger_value  VARCHAR(512) NOT NULL,
-    metadata       JSON,
     next_fire_time DATETIME(6),
     state          VARCHAR(32)  NOT NULL DEFAULT 'WAITING',
     instance_id    VARCHAR(255),
@@ -56,14 +55,13 @@ CREATE TABLE IF NOT EXISTS ` + prefix + `scheduler_executions (
 
 func (MySQL) UpsertJobSQL(table string) string {
 	return fmt.Sprintf(`
-		INSERT INTO %s (job_id, name, trigger_type, trigger_value, metadata,
+		INSERT INTO %s (job_id, name, trigger_type, trigger_value,
 		                next_fire_time, state, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 			name = VALUES(name),
 			trigger_type = VALUES(trigger_type),
 			trigger_value = VALUES(trigger_value),
-			metadata = VALUES(metadata),
 			next_fire_time = VALUES(next_fire_time),
 			enabled = VALUES(enabled),
 			updated_at = VALUES(updated_at)

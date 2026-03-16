@@ -405,10 +405,9 @@ func (s *Scheduler) rehydrate() error {
 		}
 
 		job := Job{
-			ID:       rec.ID,
-			Name:     rec.Name,
-			Trigger:  trigger,
-			Metadata: rec.Metadata,
+			ID:      rec.ID,
+			Name:    rec.Name,
+			Trigger: trigger,
 		}
 
 		var next time.Time
@@ -446,7 +445,6 @@ func jobToRecord(job *Job, nextFire time.Time) *JobRecord {
 	rec := &JobRecord{
 		ID:           job.ID,
 		Name:         job.Name,
-		Metadata:     job.Metadata,
 		NextFireTime: nextFire,
 		State:        StateWaiting,
 		Enabled:      true,

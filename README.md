@@ -267,7 +267,8 @@ See the [\_examples/](_examples/) directory:
 ```
 scheduler/
 ├── scheduler.go        # Scheduler core, run loop, Run()
-├── job.go              # Job, Trigger, CronTrigger, OnceTrigger, IntervalTrigger
+├── job.go              # JobID, Job, Trigger interface
+├── trigger.go          # CronTrigger, OnceTrigger, IntervalTrigger
 ├── interfaces.go       # JobStore interface, JobRecord, ExecutionRecord
 ├── options.go          # Functional options
 ├── errors.go           # Sentinel errors

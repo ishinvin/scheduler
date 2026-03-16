@@ -37,12 +37,6 @@ func (s *Store) SaveJob(_ context.Context, job *scheduler.JobRecord) error {
 	}
 
 	cp := *job
-	if job.Metadata != nil {
-		cp.Metadata = make(map[string]string, len(job.Metadata))
-		for k, v := range job.Metadata {
-			cp.Metadata[k] = v
-		}
-	}
 	s.jobs[job.ID] = &cp
 	return nil
 }
