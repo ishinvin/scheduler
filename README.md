@@ -1,6 +1,6 @@
 # scheduler
 
-A job scheduling library for Go with pluggable job stores, distributed locking, and `oklog/run` integration.
+A job scheduling library for Go with pluggable job stores and distributed locking.
 
 ## Features
 
@@ -8,8 +8,7 @@ A job scheduling library for Go with pluggable job stores, distributed locking, 
 - **Register / Reschedule / Delete** jobs at runtime
 - **Pluggable JobStore** — choose between memory (single-instance) or JDBC (clustered)
 - **Distributed locking** — JDBC store uses `TRIGGER_ACCESS` table lock for safe multi-instance deployments
-- **`oklog/run` compatible** — `Actor()` returns `(execute, interrupt)` for goroutine lifecycle management
-- **Named handler registry** — bind functions by name for dynamic/persisted jobs
+- **Context-based lifecycle** — `Run(ctx)` blocks until the context is canceled, with graceful shutdown
 
 ## Installation
 
@@ -28,8 +27,10 @@ import (
     "context"
     "fmt"
     "log"
+    "os/signal"
+    "syscall"
+    "time"
 
-    "github.com/oklog/run"
     "github.com/ishinvin/scheduler"
     "github.com/ishinvin/scheduler/jobstore/memory"
 )
@@ -39,8 +40,10 @@ func main() {
         scheduler.WithJobStore(memory.New()),
     )
 
+    ctx := context.Background()
+
     // Register a cron job
-    sched.Register(context.Background(), scheduler.Job{
+    sched.Register(ctx, scheduler.Job{
         ID:   "daily-report",
         Name: "Generate daily report",
         Trigger: must(scheduler.NewCronTrigger("0 9 * * *")),
@@ -51,7 +54,7 @@ func main() {
     })
 
     // Register an interval job
-    sched.Register(context.Background(), scheduler.Job{
+    sched.Register(ctx, scheduler.Job{
         ID:      "health-check",
         Name:    "Health check",
         Trigger: scheduler.NewIntervalTrigger(30 * time.Second),
@@ -61,10 +64,10 @@ func main() {
         },
     })
 
-    // Run with oklog/run
-    var g run.Group
-    g.Add(sched.Actor())
-    log.Fatal(g.Run())
+    // Start the scheduler. Blocks until signal.
+    ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+    defer stop()
+    log.Fatal(sched.Run(ctx))
 }
 
 func must[T any](v T, err error) T {
@@ -84,9 +87,10 @@ import (
     "context"
     "database/sql"
     "log"
+    "os/signal"
+    "syscall"
 
     _ "github.com/lib/pq"
-    "github.com/oklog/run"
     "github.com/ishinvin/scheduler"
     "github.com/ishinvin/scheduler/jobstore/jdbc"
 )
@@ -103,9 +107,11 @@ func main() {
         scheduler.WithInstanceID("worker-1"),
     )
 
-    // Register a job with Fn. The function is stored by job ID
-    // so rehydrated jobs can resolve it on restart.
-    sched.Register(context.Background(), scheduler.Job{
+    ctx := context.Background()
+
+    // Register a job. Fn is stored by job ID so rehydrated jobs
+    // can resolve it on restart.
+    sched.Register(ctx, scheduler.Job{
         ID:      "welcome-email",
         Name:    "Send welcome emails",
         Trigger: must(scheduler.NewCronTrigger("*/5 * * * *")),
@@ -115,9 +121,10 @@ func main() {
         },
     })
 
-    var g run.Group
-    g.Add(sched.Actor())
-    log.Fatal(g.Run())
+    // Start the scheduler. Blocks until signal.
+    ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+    defer stop()
+    log.Fatal(sched.Run(ctx))
 }
 ```
 
@@ -220,8 +227,8 @@ sched.Reschedule(ctx, id JobID, trigger Trigger) error
 // Remove a job
 sched.Delete(ctx, id JobID) error
 
-// Get oklog/run-compatible actor
-execute, interrupt := sched.Actor()
+// Run the scheduler (blocks until ctx is canceled)
+sched.Run(ctx context.Context) error
 ```
 
 ### Options
@@ -259,7 +266,7 @@ See the [\_examples/](_examples/) directory:
 
 ```
 scheduler/
-├── scheduler.go        # Scheduler core, run loop, Actor()
+├── scheduler.go        # Scheduler core, run loop, Run()
 ├── job.go              # Job, Trigger, CronTrigger, OnceTrigger, IntervalTrigger
 ├── interfaces.go       # JobStore interface, JobRecord, ExecutionRecord
 ├── options.go          # Functional options

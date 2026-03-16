@@ -83,23 +83,14 @@ func main() {
 		},
 	})
 
-	// Start the scheduler.
-	execute, interrupt := sched.Actor()
-	go func() {
-		if err := execute(); err != nil {
-			log.Fatalf("scheduler: %v", err)
-		}
-	}()
+	// Start the scheduler. Blocks until the context is canceled.
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	fmt.Println("scheduler started (ctrl+c to stop)")
-
-	// Wait for signal.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-
-	fmt.Println("shutting down...")
-	interrupt(nil)
+	if err := sched.Run(ctx); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func must[T any](v T, err error) T {

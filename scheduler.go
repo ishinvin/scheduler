@@ -39,7 +39,6 @@ type Scheduler struct {
 	clusterCheckinInterval time.Duration
 
 	ctx    context.Context
-	cancel context.CancelFunc
 	wakeUp chan struct{}
 	wg     sync.WaitGroup
 }
@@ -47,7 +46,6 @@ type Scheduler struct {
 // New creates a new Scheduler with the given options.
 // Default: RAM job store, slog logger, UTC timezone.
 func New(opts ...Option) *Scheduler {
-	ctx, cancel := context.WithCancel(context.Background())
 	s := &Scheduler{
 		jobs:                   make(map[JobID]*entry),
 		handlers:               make(map[string]func(ctx context.Context) error),
@@ -55,8 +53,6 @@ func New(opts ...Option) *Scheduler {
 		location:               time.UTC,
 		misfireThreshold:       defaultMisfireThreshold,
 		clusterCheckinInterval: defaultClusterCheckinInterval,
-		ctx:                    ctx,
-		cancel:                 cancel,
 		wakeUp:                 make(chan struct{}, 1),
 	}
 
@@ -163,19 +159,10 @@ func (s *Scheduler) Delete(ctx context.Context, id JobID) error {
 	return nil
 }
 
-// Actor returns execute and interrupt functions compatible with oklog/run.Group.
-func (s *Scheduler) Actor() (execute func() error, interrupt func(error)) {
-	execute = func() error {
-		return s.run()
-	}
-	interrupt = func(error) {
-		s.cancel()
-	}
-	return
-}
-
-// run is the core scheduling loop.
-func (s *Scheduler) run() error {
+// Run starts the scheduling loop. It blocks until ctx is canceled,
+// then waits for in-flight jobs to complete before returning.
+func (s *Scheduler) Run(ctx context.Context) error {
+	s.ctx = ctx
 	// If the store implements JobStoreInitializer, call Init (e.g., schema creation).
 	if s.store != nil {
 		if init, ok := s.store.(JobStoreInitializer); ok {

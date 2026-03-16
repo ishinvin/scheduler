@@ -42,11 +42,11 @@ func TestRegisterAndExecute(t *testing.T) {
 		t.Fatalf("expected ErrJobAlreadyExists, got %v", err)
 	}
 
-	execute, interrupt := s.Actor()
-	go func() { _ = execute() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(200 * time.Millisecond)
-	interrupt(nil)
+	cancel()
 
 	if count.Load() == 0 {
 		t.Fatal("expected job to have fired at least once")
@@ -79,11 +79,11 @@ func TestReschedule(t *testing.T) {
 		t.Fatalf("Reschedule: %v", err)
 	}
 
-	execute, interrupt := s.Actor()
-	go func() { _ = execute() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(200 * time.Millisecond)
-	interrupt(nil)
+	cancel()
 
 	if count.Load() == 0 {
 		t.Fatal("expected job to fire after reschedule")
@@ -110,8 +110,8 @@ func TestDelete(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	execute, interrupt := s.Actor()
-	go func() { _ = execute() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(150 * time.Millisecond)
 
@@ -127,7 +127,7 @@ func TestDelete(t *testing.T) {
 		t.Fatal("job kept running after delete")
 	}
 
-	interrupt(nil)
+	cancel()
 
 	// Delete non-existent job.
 	err := s.Delete(ctx, "nonexistent")
@@ -155,11 +155,11 @@ func TestOnceTrigger(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	execute, interrupt := s.Actor()
-	go func() { _ = execute() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(300 * time.Millisecond)
-	interrupt(nil)
+	cancel()
 
 	if count.Load() != 1 {
 		t.Fatalf("expected once trigger to fire exactly 1 time, got %d", count.Load())
@@ -185,11 +185,11 @@ func TestHandlerRegistry(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	execute, interrupt := s.Actor()
-	go func() { _ = execute() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(200 * time.Millisecond)
-	interrupt(nil)
+	cancel()
 
 	if count.Load() == 0 {
 		t.Fatal("expected handler to have been invoked at least once")
@@ -299,11 +299,11 @@ func TestClusterModeDispatch(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	execute, interrupt := s.Actor()
-	go func() { _ = execute() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(300 * time.Millisecond)
-	interrupt(nil)
+	cancel()
 
 	if count.Load() == 0 {
 		t.Fatal("expected cluster mode job to have fired at least once")
@@ -329,11 +329,11 @@ func TestClusterModeOnceTrigger(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	execute, interrupt := s.Actor()
-	go func() { _ = execute() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(400 * time.Millisecond)
-	interrupt(nil)
+	cancel()
 
 	if count.Load() != 1 {
 		t.Fatalf("expected once trigger to fire exactly 1 time in cluster mode, got %d", count.Load())
@@ -360,8 +360,8 @@ func TestClusterModeReschedule(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	execute, interrupt := s.Actor()
-	go func() { _ = execute() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = s.Run(ctx) }()
 
 	// Reschedule to fire fast.
 	time.Sleep(100 * time.Millisecond)
@@ -370,7 +370,7 @@ func TestClusterModeReschedule(t *testing.T) {
 	}
 
 	time.Sleep(300 * time.Millisecond)
-	interrupt(nil)
+	cancel()
 
 	if count.Load() == 0 {
 		t.Fatal("expected job to fire after reschedule in cluster mode")

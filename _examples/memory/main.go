@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -53,16 +52,6 @@ func main() {
 		},
 	})
 
-	// Start the scheduler.
-	execute, interrupt := sched.Actor()
-	go func() {
-		if err := execute(); err != nil {
-			log.Fatalf("scheduler: %v", err)
-		}
-	}()
-
-	fmt.Println("scheduler started (ctrl+c to stop)")
-
 	// Demonstrate reschedule after 15 seconds.
 	go func() {
 		time.Sleep(15 * time.Second)
@@ -70,13 +59,14 @@ func main() {
 		sched.Reschedule(ctx, "interval-job", scheduler.NewIntervalTrigger(2*time.Second))
 	}()
 
-	// Wait for signal.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	// Start the scheduler. Blocks until the context is canceled.
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	fmt.Println("shutting down...")
-	interrupt(nil)
+	fmt.Println("scheduler started (ctrl+c to stop)")
+	if err := sched.Run(ctx); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func must[T any](v T, err error) T {
