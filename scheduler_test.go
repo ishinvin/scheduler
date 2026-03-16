@@ -171,17 +171,13 @@ func TestHandlerRegistry(t *testing.T) {
 
 	var count atomic.Int32
 
-	s.RegisterHandler("my-handler", func(_ context.Context) error {
-		count.Add(1)
-		return nil
-	})
-
 	job := scheduler.Job{
 		ID:      "handler-1",
 		Name:    "handler test",
 		Trigger: scheduler.NewIntervalTrigger(50 * time.Millisecond),
-		Metadata: map[string]string{
-			"handler": "my-handler",
+		Fn: func(_ context.Context) error {
+			count.Add(1)
+			return nil
 		},
 	}
 

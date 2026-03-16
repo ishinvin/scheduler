@@ -48,26 +48,17 @@ func main() {
 		scheduler.WithInstanceID("worker-1"),
 	)
 
-	// Register named handlers for dynamic/persisted jobs.
-	sched.RegisterHandler("cleanup", func(ctx context.Context) error {
-		fmt.Println(time.Now().Format(time.RFC3339), "running cleanup...")
-		return nil
-	})
-
-	sched.RegisterHandler("report", func(ctx context.Context) error {
-		fmt.Println(time.Now().Format(time.RFC3339), "generating report...")
-		return nil
-	})
-
 	ctx := context.Background()
 
 	// Register jobs. These are persisted to PostgreSQL and survive restarts.
+	// The Fn is stored by job ID so rehydrated jobs can resolve it on restart.
 	sched.Register(ctx, scheduler.Job{
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",
 		Trigger: must(scheduler.NewCronTrigger("*/5 * * * *")), // every 5 minutes
-		Metadata: map[string]string{
-			"handler": "cleanup",
+		Fn: func(ctx context.Context) error {
+			fmt.Println(time.Now().Format(time.RFC3339), "running cleanup...")
+			return nil
 		},
 	})
 
@@ -75,12 +66,12 @@ func main() {
 		ID:      "daily-report",
 		Name:    "Daily report",
 		Trigger: must(scheduler.NewCronTrigger("0 9 * * *")), // 9 AM daily
-		Metadata: map[string]string{
-			"handler": "report",
+		Fn: func(ctx context.Context) error {
+			fmt.Println(time.Now().Format(time.RFC3339), "generating report...")
+			return nil
 		},
 	})
 
-	// You can also register jobs with inline functions (not persisted across restarts).
 	sched.Register(ctx, scheduler.Job{
 		ID:      "heartbeat",
 		Name:    "Heartbeat",

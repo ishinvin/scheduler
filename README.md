@@ -103,19 +103,15 @@ func main() {
         scheduler.WithInstanceID("worker-1"),
     )
 
-    // Register a handler by name (for persisted/dynamic jobs)
-    sched.RegisterHandler("send-email", func(ctx context.Context) error {
-        // send email logic
-        return nil
-    })
-
-    // Register a job that references the handler
+    // Register a job with Fn. The function is stored by job ID
+    // so rehydrated jobs can resolve it on restart.
     sched.Register(context.Background(), scheduler.Job{
         ID:      "welcome-email",
         Name:    "Send welcome emails",
         Trigger: must(scheduler.NewCronTrigger("*/5 * * * *")),
-        Metadata: map[string]string{
-            "handler": "send-email",
+        Fn: func(ctx context.Context) error {
+            // send email logic
+            return nil
         },
     })
 
@@ -215,7 +211,7 @@ You can also call `store.CreateSchema(ctx)` or `store.SchemaSQL()` directly.
 // Create a new scheduler
 sched := scheduler.New(opts ...Option)
 
-// Register a new job
+// Register a new job (Fn is stored by job ID for rehydration)
 sched.Register(ctx, job Job) error
 
 // Change a job's trigger
@@ -223,9 +219,6 @@ sched.Reschedule(ctx, id JobID, trigger Trigger) error
 
 // Remove a job
 sched.Delete(ctx, id JobID) error
-
-// Register a named handler for dynamic jobs
-sched.RegisterHandler(name string, fn func(ctx context.Context) error)
 
 // Get oklog/run-compatible actor
 execute, interrupt := sched.Actor()

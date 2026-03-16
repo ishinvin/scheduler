@@ -69,18 +69,26 @@ func New(opts ...Option) *Scheduler {
 	return s
 }
 
-// RegisterHandler registers a named handler function.
-// Jobs reference handlers by the "handler" key in their Metadata.
-func (s *Scheduler) RegisterHandler(name string, fn func(ctx context.Context) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.handlers[name] = fn
-}
-
-// Register adds a new job to the scheduler and persists it to the job store.
-// For static jobs (with Fn set), the job runs in-process.
-// For dynamic jobs, set Metadata["handler"] to a registered handler name.
+// Register adds a job to the scheduler and persists it to the job store.
+//
+// If Fn is set, it is also stored as the handler for this job ID, so that
+// rehydrated jobs (loaded from the DB on restart) can resolve it.
+//
+// If Trigger is nil, only the handler is registered (no job is scheduled).
+// This is useful on restart to provide Fn for jobs that will be rehydrated.
 func (s *Scheduler) Register(ctx context.Context, job Job) error {
+	// Store Fn as handler keyed by job ID.
+	if job.Fn != nil {
+		s.mu.Lock()
+		s.handlers[string(job.ID)] = job.Fn
+		s.mu.Unlock()
+	}
+
+	// Handler-only registration — no scheduling.
+	if job.Trigger == nil {
+		return nil
+	}
+
 	now := time.Now().In(s.location)
 	next := job.Trigger.NextFireTime(now)
 
@@ -320,11 +328,10 @@ func (s *Scheduler) executeJob(job Job) {
 	fn := job.Fn
 	if fn == nil {
 		s.mu.RLock()
-		handlerName := job.Metadata["handler"]
-		h, ok := s.handlers[handlerName]
+		h, ok := s.handlers[string(job.ID)]
 		s.mu.RUnlock()
 		if !ok {
-			s.logger.Error("handler not found", "job", job.ID, "handler", handlerName)
+			s.logger.Error("handler not found", "job", job.ID)
 			// Release the acquired lock so the job doesn't stay stuck.
 			if s.store != nil {
 				now := time.Now().In(s.location)
