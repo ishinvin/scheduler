@@ -1,0 +1,98 @@
+package scheduler
+
+import (
+	"context"
+	"fmt"
+	"sync/atomic"
+	"time"
+
+	"github.com/robfig/cron/v3"
+)
+
+// JobID is a unique string identifier for a job.
+type JobID string
+
+// Job is the unit of work the scheduler manages.
+type Job struct {
+	ID       JobID
+	Name     string
+	Trigger  Trigger
+	Fn       func(ctx context.Context) error
+	Metadata map[string]string
+	Timeout  time.Duration // per-execution timeout; 0 = no timeout
+}
+
+// Trigger determines when a Job should fire next.
+type Trigger interface {
+	NextFireTime(after time.Time) time.Time
+	fmt.Stringer
+}
+
+// CronTrigger wraps a parsed cron expression.
+type CronTrigger struct {
+	Expr     string
+	schedule cron.Schedule
+}
+
+// NewCronTrigger parses a cron expression and returns a CronTrigger.
+// Supports standard 5-field cron and optional seconds field via robfig/cron/v3.
+func NewCronTrigger(expr string) (*CronTrigger, error) {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+	schedule, err := parser.Parse(expr)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidCron, err)
+	}
+	return &CronTrigger{Expr: expr, schedule: schedule}, nil
+}
+
+func (c *CronTrigger) NextFireTime(after time.Time) time.Time {
+	return c.schedule.Next(after)
+}
+
+func (c *CronTrigger) String() string {
+	return fmt.Sprintf("cron(%s)", c.Expr)
+}
+
+// OnceTrigger fires exactly once at a specific time.
+type OnceTrigger struct {
+	At   time.Time
+	done atomic.Bool
+}
+
+// NewOnceTrigger creates a trigger that fires once at the given time.
+func NewOnceTrigger(at time.Time) *OnceTrigger {
+	return &OnceTrigger{At: at}
+}
+
+func (o *OnceTrigger) NextFireTime(after time.Time) time.Time {
+	if o.done.Load() || !o.At.After(after) {
+		return time.Time{}
+	}
+	return o.At
+}
+
+func (o *OnceTrigger) MarkDone() {
+	o.done.Store(true)
+}
+
+func (o *OnceTrigger) String() string {
+	return fmt.Sprintf("once(%s)", o.At.Format(time.RFC3339))
+}
+
+// IntervalTrigger fires repeatedly at a fixed interval.
+type IntervalTrigger struct {
+	Every time.Duration
+}
+
+// NewIntervalTrigger creates a trigger that fires at the given interval.
+func NewIntervalTrigger(every time.Duration) *IntervalTrigger {
+	return &IntervalTrigger{Every: every}
+}
+
+func (i *IntervalTrigger) NextFireTime(after time.Time) time.Time {
+	return after.Add(i.Every)
+}
+
+func (i *IntervalTrigger) String() string {
+	return fmt.Sprintf("every(%s)", i.Every)
+}

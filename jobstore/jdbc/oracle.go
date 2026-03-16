@@ -1,0 +1,93 @@
+package jdbc
+
+import (
+	"fmt"
+	"strings"
+)
+
+// oraColumns is the column list for Oracle SELECT queries (uppercase identifiers).
+const oraColumns = `JOB_ID, NAME, TRIGGER_TYPE, TRIGGER_VALUE, METADATA,
+		        NEXT_FIRE_TIME, STATE, INSTANCE_ID, ACQUIRED_AT, ENABLED, CREATED_AT, UPDATED_AT`
+
+// Oracle implements Dialect for Oracle Database.
+type Oracle struct{}
+
+func (Oracle) Placeholder(index int) string { return fmt.Sprintf(":%d", index) }
+func (Oracle) Columns() string              { return oraColumns }
+func (Oracle) BooleanTrue() string          { return "1" }
+func (Oracle) Col(name string) string       { return strings.ToUpper(name) }
+
+func (Oracle) SchemaSQL(prefix string) string {
+	p := strings.ToUpper(prefix)
+	return `
+CREATE TABLE ` + p + `SCHEDULER_JOBS (
+    JOB_ID         VARCHAR2(256) PRIMARY KEY,
+    NAME           VARCHAR2(512) NOT NULL,
+    TRIGGER_TYPE   VARCHAR2(32)  NOT NULL,
+    TRIGGER_VALUE  VARCHAR2(512) NOT NULL,
+    METADATA       CLOB DEFAULT '{}',
+    NEXT_FIRE_TIME TIMESTAMP WITH TIME ZONE,
+    STATE          VARCHAR2(32) DEFAULT 'WAITING' NOT NULL,
+    INSTANCE_ID    VARCHAR2(256),
+    ACQUIRED_AT    TIMESTAMP WITH TIME ZONE,
+    ENABLED        NUMBER(1) DEFAULT 1 NOT NULL,
+    CREATED_AT     TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    UPDATED_AT     TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+);
+
+CREATE INDEX IDX_` + p + `SCHED_JOBS_FIRE
+    ON ` + p + `SCHEDULER_JOBS (NEXT_FIRE_TIME, STATE, ENABLED);
+
+CREATE TABLE ` + p + `SCHEDULER_LOCKS (
+    LOCK_NAME VARCHAR2(64) PRIMARY KEY
+);
+
+INSERT INTO ` + p + `SCHEDULER_LOCKS (LOCK_NAME)
+    SELECT 'TRIGGER_ACCESS' FROM DUAL
+    WHERE NOT EXISTS (SELECT 1 FROM ` + p + `SCHEDULER_LOCKS WHERE LOCK_NAME = 'TRIGGER_ACCESS');
+
+CREATE TABLE ` + p + `SCHEDULER_EXECUTIONS (
+    ID          NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    JOB_ID      VARCHAR2(256) NOT NULL,
+    INSTANCE_ID VARCHAR2(256),
+    STARTED_AT  TIMESTAMP WITH TIME ZONE NOT NULL,
+    FINISHED_AT TIMESTAMP WITH TIME ZONE NOT NULL,
+    ERROR       VARCHAR2(4000) DEFAULT ''
+);
+
+CREATE INDEX IDX_` + p + `SCHED_EXEC_JOB
+    ON ` + p + `SCHEDULER_EXECUTIONS (JOB_ID, STARTED_AT DESC);
+`
+}
+
+func (Oracle) UpsertJobSQL(table string) string {
+	return fmt.Sprintf(`
+		MERGE INTO %s DST
+		USING (SELECT :1 AS JOB_ID, :2 AS NAME, :3 AS TRIGGER_TYPE, :4 AS TRIGGER_VALUE,
+		              :5 AS METADATA, :6 AS NEXT_FIRE_TIME, :7 AS STATE, :8 AS ENABLED,
+		              :9 AS CREATED_AT, :10 AS UPDATED_AT FROM DUAL) SRC
+		ON (DST.JOB_ID = SRC.JOB_ID)
+		WHEN MATCHED THEN UPDATE SET
+			DST.NAME = SRC.NAME,
+			DST.TRIGGER_TYPE = SRC.TRIGGER_TYPE,
+			DST.TRIGGER_VALUE = SRC.TRIGGER_VALUE,
+			DST.METADATA = SRC.METADATA,
+			DST.NEXT_FIRE_TIME = SRC.NEXT_FIRE_TIME,
+			DST.ENABLED = SRC.ENABLED,
+			DST.UPDATED_AT = SRC.UPDATED_AT
+		WHEN NOT MATCHED THEN INSERT
+			(JOB_ID, NAME, TRIGGER_TYPE, TRIGGER_VALUE, METADATA,
+			 NEXT_FIRE_TIME, STATE, ENABLED, CREATED_AT, UPDATED_AT)
+		VALUES (SRC.JOB_ID, SRC.NAME, SRC.TRIGGER_TYPE, SRC.TRIGGER_VALUE,
+		        SRC.METADATA, SRC.NEXT_FIRE_TIME, SRC.STATE, SRC.ENABLED,
+		        SRC.CREATED_AT, SRC.UPDATED_AT)
+	`, table)
+}
+
+func (Oracle) LockRowSQL(table string) string {
+	return fmt.Sprintf("SELECT LOCK_NAME FROM %s WHERE LOCK_NAME = :1 FOR UPDATE NOWAIT", table)
+}
+
+func (Oracle) IsLockNotAvailable(err error) bool {
+	return containsString(err, "ORA-00054")
+}

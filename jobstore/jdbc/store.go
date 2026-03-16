@@ -1,0 +1,355 @@
+package jdbc
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ishinvin/scheduler"
+)
+
+// InitializeSchema controls whether the JDBC store creates tables on startup.
+// Controls whether the JDBC store creates tables on startup.
+type InitializeSchema string
+
+const (
+	// InitSchemaNever means the library never creates tables.
+	// The user (or a migration tool like Liquibase/Flyway) manages the schema.
+	InitSchemaNever InitializeSchema = "never"
+
+	// InitSchemaAlways means the library creates tables on first use via CreateSchema().
+	// Safe to call repeatedly — uses IF NOT EXISTS / MERGE idioms.
+	InitSchemaAlways InitializeSchema = "always"
+)
+
+// LockTriggerAccess is the named lock row used by AcquireJob.
+const LockTriggerAccess = "TRIGGER_ACCESS"
+
+// Store implements scheduler.JobStore using a JDBC approach:
+// named lock rows (TRIGGER_ACCESS) protect atomic state transitions on the jobs table.
+//
+// Tables required:
+//   - {prefix}scheduler_jobs       — job definitions with state and next_fire_time
+//   - {prefix}scheduler_locks      — named lock rows (TRIGGER_ACCESS)
+//   - {prefix}scheduler_executions — execution audit log
+type Store struct {
+	db               *sql.DB
+	dialect          Dialect
+	instanceID       string
+	tablePrefix      string
+	initializeSchema InitializeSchema
+}
+
+// table returns a fully qualified table name with prefix, using the dialect's
+// identifier casing (e.g., lowercase for Postgres/SQLite, uppercase for Oracle).
+func (s *Store) table(name string) string {
+	return s.dialect.Col(s.tablePrefix + name)
+}
+
+func (s *Store) jobsTable() string  { return s.table("scheduler_jobs") }
+func (s *Store) locksTable() string { return s.table("scheduler_locks") }
+func (s *Store) execsTable() string { return s.table("scheduler_executions") }
+
+// Option configures a JDBC Store.
+type Option func(*Store)
+
+// WithTablePrefix sets a prefix for all table names.
+// The dialect's Col() method applies the correct identifier casing.
+// e.g., WithTablePrefix("myapp_") → myapp_scheduler_jobs (Postgres) or MYAPP_SCHEDULER_JOBS (Oracle).
+func WithTablePrefix(prefix string) Option {
+	return func(s *Store) { s.tablePrefix = prefix }
+}
+
+// WithInstanceID sets the instance identifier for distributed tracking.
+func WithInstanceID(id string) Option {
+	return func(s *Store) { s.instanceID = id }
+}
+
+// WithInitializeSchema controls whether the store creates tables on startup.
+//
+//   - InitSchemaNever (default) — the user manages the schema externally
+//     (e.g., Liquibase, Flyway, or manual DDL). Use SchemaSQL() or
+//     Postgres{}.SchemaSQL() / Oracle{}.SchemaSQL() to get the DDL.
+//   - InitSchemaAlways — the store calls CreateSchema() automatically when
+//     the scheduler starts. Safe to call repeatedly (uses IF NOT EXISTS).
+func WithInitializeSchema(mode InitializeSchema) Option {
+	return func(s *Store) { s.initializeSchema = mode }
+}
+
+// New creates a new JDBC-backed job store.
+func New(db *sql.DB, dialect Dialect, opts ...Option) *Store {
+	s := &Store{
+		db:               db,
+		dialect:          dialect,
+		instanceID:       "default",
+		initializeSchema: InitSchemaNever,
+	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
+}
+
+// CreateSchema executes the DDL statements to create all scheduler tables
+// and seed the lock rows. Safe to call repeatedly — uses IF NOT EXISTS / MERGE.
+func (s *Store) CreateSchema(ctx context.Context) error {
+	ddl := s.SchemaSQL()
+	for _, stmt := range splitStatements(ddl) {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("jdbc store: create schema: %w", err)
+		}
+	}
+	return nil
+}
+
+// SchemaSQL returns the full DDL string for this store's dialect and table prefix.
+func (s *Store) SchemaSQL() string {
+	return s.dialect.SchemaSQL(s.tablePrefix)
+}
+
+// splitStatements splits a multi-statement DDL string by semicolons.
+func splitStatements(ddl string) []string {
+	return strings.Split(ddl, ";")
+}
+
+// --- scheduler.JobStore implementation ---
+
+// SaveJob persists or updates a job definition.
+func (s *Store) SaveJob(ctx context.Context, job *scheduler.JobRecord) error {
+	query := s.dialect.UpsertJobSQL(s.jobsTable())
+	meta := serializeMetadata(job.Metadata)
+	now := time.Now()
+
+	_, err := s.db.ExecContext(ctx, query,
+		string(job.ID),
+		job.Name,
+		job.TriggerType,
+		job.TriggerValue,
+		meta,
+		job.NextFireTime,
+		scheduler.StateWaiting,
+		job.Enabled,
+		now,
+		now,
+	)
+	if err != nil {
+		return fmt.Errorf("jdbc store: save job: %w", err)
+	}
+	return nil
+}
+
+// DeleteJob removes a job by ID.
+func (s *Store) DeleteJob(ctx context.Context, id scheduler.JobID) error {
+	query := deleteJobSQL(s.dialect, s.jobsTable())
+	result, err := s.db.ExecContext(ctx, query, string(id))
+	if err != nil {
+		return fmt.Errorf("jdbc store: delete job: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return scheduler.ErrJobNotFound
+	}
+	return nil
+}
+
+// GetJob retrieves a single job record.
+func (s *Store) GetJob(ctx context.Context, id scheduler.JobID) (*scheduler.JobRecord, error) {
+	query := getJobSQL(s.dialect, s.jobsTable())
+	row := s.db.QueryRowContext(ctx, query, string(id))
+	rec, err := s.scanJob(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, scheduler.ErrJobNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("jdbc store: get job: %w", err)
+	}
+	return rec, nil
+}
+
+// ListJobs returns all persisted jobs.
+func (s *Store) ListJobs(ctx context.Context) ([]*scheduler.JobRecord, error) {
+	query := listJobsSQL(s.dialect, s.jobsTable())
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("jdbc store: list jobs: %w", err)
+	}
+	defer rows.Close() // best-effort close
+
+	var result []*scheduler.JobRecord
+	for rows.Next() {
+		rec, err := s.scanJob(rows)
+		if err != nil {
+			return nil, fmt.Errorf("jdbc store: scan job: %w", err)
+		}
+		result = append(result, rec)
+	}
+	return result, rows.Err()
+}
+
+// ListDueJobs returns jobs in WAITING state whose next fire time is at or before now.
+func (s *Store) ListDueJobs(ctx context.Context, now time.Time) ([]*scheduler.JobRecord, error) {
+	query := listDueJobsSQL(s.dialect, s.jobsTable())
+	rows, err := s.db.QueryContext(ctx, query, scheduler.StateWaiting, now)
+	if err != nil {
+		return nil, fmt.Errorf("jdbc store: list due jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var result []*scheduler.JobRecord
+	for rows.Next() {
+		rec, err := s.scanJob(rows)
+		if err != nil {
+			return nil, fmt.Errorf("jdbc store: scan due job: %w", err)
+		}
+		result = append(result, rec)
+	}
+	return result, rows.Err()
+}
+
+// AcquireJob uses the TRIGGER_ACCESS table lock to atomically
+// transition a job from WAITING → ACQUIRED.
+//
+// Flow:
+//  1. BEGIN tx
+//  2. SELECT lock_name FROM scheduler_locks WHERE lock_name = 'TRIGGER_ACCESS' FOR UPDATE NOWAIT
+//  3. UPDATE scheduler_jobs SET state = 'ACQUIRED' WHERE job_id = ? AND state = 'WAITING'
+//  4. COMMIT (releases the TRIGGER_ACCESS row lock)
+func (s *Store) AcquireJob(ctx context.Context, id scheduler.JobID, instanceID string) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("jdbc store: get conn: %w", err)
+	}
+	defer conn.Close() // best-effort close
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("jdbc store: begin tx: %w", err)
+	}
+
+	// Step 1: Lock TRIGGER_ACCESS row.
+	lockQuery := s.dialect.LockRowSQL(s.locksTable())
+	var lockName string
+	err = tx.QueryRowContext(ctx, lockQuery, LockTriggerAccess).Scan(&lockName)
+	if err != nil {
+		_ = tx.Rollback()
+		if s.dialect.IsLockNotAvailable(err) {
+			return scheduler.ErrLockNotAcquired
+		}
+		return fmt.Errorf("jdbc store: acquire trigger lock: %w", err)
+	}
+
+	// Step 2: Claim the job — WAITING → ACQUIRED, set acquired_at for stale detection.
+	now := time.Now()
+	claimQuery := acquireJobSQL(s.dialect, s.jobsTable())
+	result, err := tx.ExecContext(ctx, claimQuery,
+		scheduler.StateAcquired, instanceID, now, now, string(id), scheduler.StateWaiting,
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("jdbc store: claim job: %w", err)
+	}
+
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		_ = tx.Rollback()
+		return scheduler.ErrLockNotAcquired
+	}
+
+	// Step 3: Commit — releases the TRIGGER_ACCESS row lock.
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("jdbc store: commit claim: %w", err)
+	}
+	return nil
+}
+
+// ReleaseJob transitions a job from ACQUIRED back to WAITING with the new next fire time.
+// If nextFireTime is zero (e.g., OnceTrigger completed), the job is set to COMPLETE.
+func (s *Store) ReleaseJob(ctx context.Context, id scheduler.JobID, nextFireTime time.Time) error {
+	state := scheduler.StateWaiting
+	if nextFireTime.IsZero() {
+		state = scheduler.StateComplete
+	}
+	query := releaseJobSQL(s.dialect, s.jobsTable())
+	_, err := s.db.ExecContext(ctx, query,
+		state, nextFireTime, time.Now(), string(id),
+	)
+	if err != nil {
+		return fmt.Errorf("jdbc store: release job: %w", err)
+	}
+	return nil
+}
+
+// RecordExecution logs a completed execution for audit.
+func (s *Store) RecordExecution(ctx context.Context, exec *scheduler.ExecutionRecord) error {
+	query := insertExecutionSQL(s.dialect, s.execsTable())
+	_, err := s.db.ExecContext(ctx, query,
+		string(exec.JobID), exec.Instance, exec.StartedAt, exec.FinishedAt, exec.Err,
+	)
+	if err != nil {
+		return fmt.Errorf("jdbc store: record execution: %w", err)
+	}
+	return nil
+}
+
+// RecoverStaleJobs resets jobs stuck in ACQUIRED state longer than the threshold
+// back to WAITING. Returns the number of recovered jobs.
+func (s *Store) RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error) {
+	cutoff := time.Now().Add(-threshold)
+	query := recoverStaleJobsSQL(s.dialect, s.jobsTable())
+	result, err := s.db.ExecContext(ctx, query,
+		scheduler.StateWaiting, time.Now(), scheduler.StateAcquired, cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("jdbc store: recover stale jobs: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	return int(n), nil
+}
+
+// Close releases any resources held by the store.
+func (*Store) Close() error {
+	return nil
+}
+
+// Init implements scheduler.JobStoreInitializer.
+// When InitializeSchema is set to InitSchemaAlways, it creates the schema.
+func (s *Store) Init(ctx context.Context) error {
+	if s.initializeSchema == InitSchemaAlways {
+		if err := s.CreateSchema(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// --- scan helpers ---
+
+// scanner is satisfied by both *sql.Row and *sql.Rows.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func (*Store) scanJob(sc scanner) (*scheduler.JobRecord, error) {
+	var rec scheduler.JobRecord
+	var id, meta string
+	var instanceID sql.NullString
+	var acquiredAt sql.NullTime
+	err := sc.Scan(&id, &rec.Name, &rec.TriggerType, &rec.TriggerValue,
+		&meta, &rec.NextFireTime, &rec.State, &instanceID, &acquiredAt, &rec.Enabled,
+		&rec.CreatedAt, &rec.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	rec.ID = scheduler.JobID(id)
+	rec.InstanceID = instanceID.String
+	rec.AcquiredAt = acquiredAt.Time
+	rec.Metadata = deserializeMetadata(meta)
+	return &rec, nil
+}
