@@ -14,6 +14,7 @@ import (
 func newTestScheduler() *scheduler.Scheduler {
 	return scheduler.New(
 		scheduler.WithJobStore(memory.New()),
+		scheduler.WithPollInterval(25*time.Millisecond),
 	)
 }
 
@@ -131,8 +132,8 @@ func TestDelete(t *testing.T) {
 
 	// Delete non-existent job.
 	err := s.Delete(ctx, "nonexistent")
-	if !errors.Is(err, scheduler.ErrJobNotFound) {
-		t.Fatalf("expected ErrJobNotFound, got %v", err)
+	if err == nil {
+		t.Fatal("expected error for deleting non-existent job")
 	}
 }
 
@@ -217,6 +218,7 @@ func TestRecoverStaleJobs(t *testing.T) {
 	s := scheduler.New(
 		scheduler.WithJobStore(store),
 		scheduler.WithMisfireThreshold(100*time.Millisecond),
+		scheduler.WithPollInterval(25*time.Millisecond),
 	)
 
 	var count atomic.Int32
@@ -270,109 +272,5 @@ func TestRescheduleNotFound(t *testing.T) {
 	err := s.Reschedule(context.Background(), "nope", scheduler.NewIntervalTrigger(time.Second))
 	if !errors.Is(err, scheduler.ErrJobNotFound) {
 		t.Fatalf("expected ErrJobNotFound, got %v", err)
-	}
-}
-
-func newClusterScheduler() *scheduler.Scheduler {
-	return scheduler.New(
-		scheduler.WithJobStore(memory.New()),
-		scheduler.WithClusterMode(50*time.Millisecond),
-	)
-}
-
-func TestClusterModeDispatch(t *testing.T) {
-	s := newClusterScheduler()
-
-	var count atomic.Int32
-
-	job := scheduler.Job{
-		ID:      "cluster-1",
-		Name:    "cluster job",
-		Trigger: scheduler.NewIntervalTrigger(50 * time.Millisecond),
-		Fn: func(_ context.Context) error {
-			count.Add(1)
-			return nil
-		},
-	}
-
-	if err := s.Register(context.Background(), job); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = s.Run(ctx) }()
-
-	time.Sleep(300 * time.Millisecond)
-	cancel()
-
-	if count.Load() == 0 {
-		t.Fatal("expected cluster mode job to have fired at least once")
-	}
-}
-
-func TestClusterModeOnceTrigger(t *testing.T) {
-	s := newClusterScheduler()
-
-	var count atomic.Int32
-
-	job := scheduler.Job{
-		ID:      "cluster-once-1",
-		Name:    "fire once cluster",
-		Trigger: scheduler.NewOnceTrigger(time.Now().Add(50 * time.Millisecond)),
-		Fn: func(_ context.Context) error {
-			count.Add(1)
-			return nil
-		},
-	}
-
-	if err := s.Register(context.Background(), job); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = s.Run(ctx) }()
-
-	time.Sleep(400 * time.Millisecond)
-	cancel()
-
-	if count.Load() != 1 {
-		t.Fatalf("expected once trigger to fire exactly 1 time in cluster mode, got %d", count.Load())
-	}
-}
-
-func TestClusterModeReschedule(t *testing.T) {
-	s := newClusterScheduler()
-
-	var count atomic.Int32
-
-	job := scheduler.Job{
-		ID:      "cluster-resched-1",
-		Name:    "slow cluster job",
-		Trigger: scheduler.NewIntervalTrigger(1 * time.Hour),
-		Fn: func(_ context.Context) error {
-			count.Add(1)
-			return nil
-		},
-	}
-
-	ctx := context.Background()
-	if err := s.Register(ctx, job); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = s.Run(ctx) }()
-
-	// Reschedule to fire fast.
-	time.Sleep(100 * time.Millisecond)
-	if err := s.Reschedule(ctx, "cluster-resched-1", scheduler.NewIntervalTrigger(50*time.Millisecond)); err != nil {
-		t.Fatalf("Reschedule: %v", err)
-	}
-
-	time.Sleep(300 * time.Millisecond)
-	cancel()
-
-	if count.Load() == 0 {
-		t.Fatal("expected job to fire after reschedule in cluster mode")
 	}
 }

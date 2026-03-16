@@ -6,7 +6,7 @@ import "time"
 type Option func(*Scheduler)
 
 // WithJobStore sets the job store implementation.
-// Use ram.New() for single-instance or jdbc.New() for clustered deployments.
+// Use memory.New() for single-instance or jdbc.New() for clustered deployments.
 func WithJobStore(s JobStore) Option {
 	return func(sc *Scheduler) { sc.store = s }
 }
@@ -33,19 +33,12 @@ func WithMisfireThreshold(d time.Duration) Option {
 	return func(sc *Scheduler) { sc.misfireThreshold = d }
 }
 
-// WithClusterMode enables DB-driven dispatch for multi-instance deployments.
-// The checkinInterval controls how often the scheduler polls the database for
-// due jobs. Lower values reduce job
-// fire latency but increase database load. Pass 0 to use the default (15s).
-//
-// Without cluster mode (default), the scheduler persists to the store but uses
-// the in-memory map for scheduling decisions — faster, but schedule changes from
-// other instances are not visible until restart.
-func WithClusterMode(checkinInterval time.Duration) Option {
+// WithPollInterval sets how often the scheduler polls the store for due jobs.
+// Lower values reduce job fire latency but increase store load. Default is 15s.
+func WithPollInterval(d time.Duration) Option {
 	return func(sc *Scheduler) {
-		sc.clusterMode = true
-		if checkinInterval > 0 {
-			sc.clusterCheckinInterval = checkinInterval
+		if d > 0 {
+			sc.pollInterval = d
 		}
 	}
 }

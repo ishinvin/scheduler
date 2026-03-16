@@ -11,32 +11,21 @@ import (
 )
 
 const (
-	defaultMisfireThreshold       = 10 * time.Minute
-	defaultIdleWait               = 24 * time.Hour
-	defaultClusterCheckinInterval = 15 * time.Second
-	cleanupTimeout                = 30 * time.Second
+	defaultMisfireThreshold = 10 * time.Minute
+	defaultPollInterval     = 15 * time.Second
+	cleanupTimeout          = 30 * time.Second
 )
 
-// entry is the internal runtime representation of a scheduled job.
-type entry struct {
-	job     Job
-	nextRun time.Time
-}
-
 // Scheduler orchestrates job scheduling using a pluggable JobStore.
+// The store is the sole source of truth for scheduling state.
 type Scheduler struct {
-	mu               sync.RWMutex
-	jobs             map[JobID]*entry
-	handlers         map[string]func(ctx context.Context) error
+	handlers         sync.Map // JobID → func(ctx context.Context) error
 	store            JobStore
 	logger           Logger
 	location         *time.Location
 	instanceID       string
 	misfireThreshold time.Duration
-
-	// Cluster mode: DB-driven dispatch instead of in-memory map.
-	clusterMode            bool
-	clusterCheckinInterval time.Duration
+	pollInterval     time.Duration
 
 	ctx    context.Context
 	wakeUp chan struct{}
@@ -44,16 +33,15 @@ type Scheduler struct {
 }
 
 // New creates a new Scheduler with the given options.
-// Default: RAM job store, slog logger, UTC timezone.
+// A JobStore must be provided via WithJobStore (e.g., memory.New() or jdbc.New()).
+// Default: slog logger, UTC timezone, 15s poll interval.
 func New(opts ...Option) *Scheduler {
 	s := &Scheduler{
-		jobs:                   make(map[JobID]*entry),
-		handlers:               make(map[string]func(ctx context.Context) error),
-		logger:                 &slogLogger{},
-		location:               time.UTC,
-		misfireThreshold:       defaultMisfireThreshold,
-		clusterCheckinInterval: defaultClusterCheckinInterval,
-		wakeUp:                 make(chan struct{}, 1),
+		logger:           &slogLogger{},
+		location:         time.UTC,
+		misfireThreshold: defaultMisfireThreshold,
+		pollInterval:     defaultPollInterval,
+		wakeUp:           make(chan struct{}, 1),
 	}
 
 	hostname, _ := os.Hostname()
@@ -62,22 +50,21 @@ func New(opts ...Option) *Scheduler {
 	for _, o := range opts {
 		o(s)
 	}
+
 	return s
 }
 
 // Register adds a job to the scheduler and persists it to the job store.
 //
-// If Fn is set, it is also stored as the handler for this job ID, so that
-// rehydrated jobs (loaded from the DB on restart) can resolve it.
+// If Fn is set, it is stored as the handler for this job ID, so that
+// jobs loaded from the store can resolve their execution function.
 //
 // If Trigger is nil, only the handler is registered (no job is scheduled).
-// This is useful on restart to provide Fn for jobs that will be rehydrated.
+// This is useful on restart to provide Fn for jobs already in the store.
 func (s *Scheduler) Register(ctx context.Context, job Job) error {
 	// Store Fn as handler keyed by job ID.
 	if job.Fn != nil {
-		s.mu.Lock()
-		s.handlers[string(job.ID)] = job.Fn
-		s.mu.Unlock()
+		s.handlers.Store(job.ID, job.Fn)
 	}
 
 	// Handler-only registration — no scheduling.
@@ -85,76 +72,66 @@ func (s *Scheduler) Register(ctx context.Context, job Job) error {
 		return nil
 	}
 
+	if s.store == nil {
+		return fmt.Errorf("scheduler: no job store configured (use WithJobStore)")
+	}
+
+	// Check for duplicates in the store.
+	if _, err := s.store.GetJob(ctx, job.ID); err == nil {
+		return ErrJobAlreadyExists
+	}
+
 	now := time.Now().In(s.location)
 	next := job.Trigger.NextFireTime(now)
 
-	// Persist to store.
-	if s.store != nil {
-		record := jobToRecord(&job, next)
-		if err := s.store.SaveJob(ctx, record); err != nil {
-			return fmt.Errorf("scheduler: register job: %w", err)
-		}
+	record := jobToRecord(&job, next)
+	if err := s.store.SaveJob(ctx, record); err != nil {
+		return fmt.Errorf("scheduler: register job: %w", err)
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.jobs[job.ID]; exists {
-		return ErrJobAlreadyExists
-	}
-	entryNext := next
-	if s.clusterMode {
-		entryNext = time.Time{} // DB drives timing in cluster mode
-	}
-	s.jobs[job.ID] = &entry{job: job, nextRun: entryNext}
 	s.signal()
 	return nil
 }
 
 // Reschedule updates the trigger of an existing job.
 func (s *Scheduler) Reschedule(ctx context.Context, id JobID, trigger Trigger) error {
-	s.mu.Lock()
-	e, exists := s.jobs[id]
-	if !exists {
-		s.mu.Unlock()
-		return ErrJobNotFound
+	rec, err := s.store.GetJob(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrJobNotFound) {
+			return ErrJobNotFound
+		}
+		return fmt.Errorf("scheduler: reschedule job: %w", err)
 	}
 
-	e.job.Trigger = trigger
 	now := time.Now().In(s.location)
 	nextRun := trigger.NextFireTime(now)
-	if s.clusterMode {
-		e.nextRun = time.Time{} // DB drives timing in cluster mode
-	} else {
-		e.nextRun = nextRun
-	}
-	job := e.job
-	s.mu.Unlock()
 
-	if s.store != nil {
-		record := jobToRecord(&job, nextRun)
-		if err := s.store.SaveJob(ctx, record); err != nil {
-			return fmt.Errorf("scheduler: reschedule job: %w", err)
-		}
+	// Build a temporary Job to convert trigger to record fields.
+	job := Job{
+		ID:      rec.ID,
+		Name:    rec.Name,
+		Trigger: trigger,
 	}
+	updated := jobToRecord(&job, nextRun)
+	// Preserve state — don't reset an ACQUIRED job.
+	updated.State = rec.State
+	updated.InstanceID = rec.InstanceID
+	updated.AcquiredAt = rec.AcquiredAt
+
+	if err := s.store.SaveJob(ctx, updated); err != nil {
+		return fmt.Errorf("scheduler: reschedule job: %w", err)
+	}
+
 	s.signal()
 	return nil
 }
 
 // Delete removes a job from the scheduler and the job store.
 func (s *Scheduler) Delete(ctx context.Context, id JobID) error {
-	s.mu.Lock()
-	if _, exists := s.jobs[id]; !exists {
-		s.mu.Unlock()
-		return ErrJobNotFound
+	if err := s.store.DeleteJob(ctx, id); err != nil {
+		return fmt.Errorf("scheduler: delete job: %w", err)
 	}
-	delete(s.jobs, id)
-	s.mu.Unlock()
-
-	if s.store != nil {
-		if err := s.store.DeleteJob(ctx, id); err != nil {
-			return fmt.Errorf("scheduler: delete job: %w", err)
-		}
-	}
+	s.handlers.Delete(id)
 	s.signal()
 	return nil
 }
@@ -162,29 +139,23 @@ func (s *Scheduler) Delete(ctx context.Context, id JobID) error {
 // Run starts the scheduling loop. It blocks until ctx is canceled,
 // then waits for in-flight jobs to complete before returning.
 func (s *Scheduler) Run(ctx context.Context) error {
+	if s.store == nil {
+		return fmt.Errorf("scheduler: no job store configured (use WithJobStore)")
+	}
+
 	s.ctx = ctx
+
 	// If the store implements JobStoreInitializer, call Init (e.g., schema creation).
-	if s.store != nil {
-		if init, ok := s.store.(JobStoreInitializer); ok {
-			if err := init.Init(s.ctx); err != nil {
-				return fmt.Errorf("scheduler: store init: %w", err)
-			}
+	if init, ok := s.store.(JobStoreInitializer); ok {
+		if err := init.Init(s.ctx); err != nil {
+			return fmt.Errorf("scheduler: store init: %w", err)
 		}
-	}
-
-	if s.clusterMode {
-		s.logger.Info("scheduler starting in cluster mode",
-			"checkinInterval", s.clusterCheckinInterval)
-	}
-
-	if err := s.rehydrate(); err != nil {
-		s.logger.Error("failed to rehydrate jobs from store", "error", err)
 	}
 
 	// Start stale job recovery ticker.
 	var recoveryTicker *time.Ticker
 	var recoveryC <-chan time.Time
-	if s.store != nil && s.misfireThreshold > 0 {
+	if s.misfireThreshold > 0 {
 		recoveryTicker = time.NewTicker(s.misfireThreshold / 2)
 		recoveryC = recoveryTicker.C
 		// Run recovery once at startup.
@@ -198,24 +169,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 	for {
 		now := time.Now().In(s.location)
+		s.dispatchDueJobs(now)
 
-		var wait time.Duration
-		if s.clusterMode {
-			s.dispatchDueJobsFromDB(now)
-			wait = s.clusterCheckinInterval
-		} else {
-			nextWake := s.dispatchDueJobs(now)
-			if nextWake.IsZero() {
-				wait = defaultIdleWait
-			} else {
-				wait = time.Until(nextWake)
-				if wait < 0 {
-					wait = 0
-				}
-			}
-		}
-
-		if done := s.waitForEvent(wait, recoveryC); done {
+		if done := s.waitForEvent(s.pollInterval, recoveryC); done {
 			return nil
 		}
 	}
@@ -242,159 +198,18 @@ func (s *Scheduler) waitForEvent(wait time.Duration, recoveryC <-chan time.Time)
 	}
 }
 
-// dispatchDueJobs runs all jobs where nextRun <= now.
-func (s *Scheduler) dispatchDueJobs(now time.Time) time.Time {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var earliest time.Time
-
-	for _, e := range s.jobs {
-		if e.nextRun.IsZero() {
-			continue
-		}
-
-		if !e.nextRun.After(now) {
-			s.wg.Add(1)
-			go s.executeJob(e.job)
-
-			if ot, ok := e.job.Trigger.(*OnceTrigger); ok {
-				ot.MarkDone()
-			}
-
-			e.nextRun = e.job.Trigger.NextFireTime(now)
-		}
-
-		if !e.nextRun.IsZero() && (earliest.IsZero() || e.nextRun.Before(earliest)) {
-			earliest = e.nextRun
-		}
-	}
-
-	return earliest
-}
-
-// dispatchDueJobsFromDB queries the store for due jobs and dispatches them.
-// Used in cluster mode where the DB is the source of truth.
-func (s *Scheduler) dispatchDueJobsFromDB(now time.Time) {
+// dispatchDueJobs queries the store for due jobs and dispatches them.
+func (s *Scheduler) dispatchDueJobs(now time.Time) {
 	records, err := s.store.ListDueJobs(s.ctx, now)
 	if err != nil {
 		s.logger.Error("failed to query due jobs from store", "error", err)
 		return
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	for _, rec := range records {
-		e, exists := s.jobs[rec.ID]
-		if !exists {
-			// Job exists in DB but not locally — no Fn/handler available on this instance.
-			continue
-		}
-
-		s.wg.Add(1)
-		go s.executeJob(e.job)
-	}
-}
-
-// executeJob runs a single job with store-level acquire/release.
-func (s *Scheduler) executeJob(job Job) {
-	defer s.wg.Done()
-
-	// Acquire job via store (distributed lock for JDBC, no-op for RAM).
-	if s.store != nil {
-		if err := s.store.AcquireJob(s.ctx, job.ID, s.instanceID); err != nil {
-			if !errors.Is(err, ErrLockNotAcquired) {
-				s.logger.Error("failed to acquire job", "job", job.ID, "error", err)
-			}
-			return
-		}
-	}
-
-	// Resolve the function to call.
-	fn := job.Fn
-	if fn == nil {
-		s.mu.RLock()
-		h, ok := s.handlers[string(job.ID)]
-		s.mu.RUnlock()
-		if !ok {
-			s.logger.Error("handler not found", "job", job.ID)
-			// Release the acquired lock so the job doesn't stay stuck.
-			if s.store != nil {
-				now := time.Now().In(s.location)
-				_ = s.store.ReleaseJob(context.Background(), job.ID, job.Trigger.NextFireTime(now))
-			}
-			return
-		}
-		fn = h
-	}
-
-	// Build execution context with optional timeout.
-	execCtx, execCancel := context.WithCancel(s.ctx)
-	if job.Timeout > 0 {
-		execCtx, execCancel = context.WithTimeout(s.ctx, job.Timeout)
-	}
-	defer execCancel()
-
-	startedAt := time.Now()
-	err := fn(execCtx)
-	finishedAt := time.Now()
-
-	// Compute next fire time for release.
-	now := time.Now().In(s.location)
-	nextFire := job.Trigger.NextFireTime(now)
-
-	// Release job back to WAITING with updated next fire time.
-	// Use a detached context so cleanup completes even during shutdown
-	// (s.ctx may already be canceled when interrupt() was called).
-	if s.store != nil {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
-		defer cleanupCancel()
-
-		if releaseErr := s.store.ReleaseJob(cleanupCtx, job.ID, nextFire); releaseErr != nil {
-			s.logger.Error("failed to release job", "job", job.ID, "error", releaseErr)
-		}
-
-		// Record execution.
-		rec := &ExecutionRecord{
-			JobID:      job.ID,
-			Instance:   s.instanceID,
-			StartedAt:  startedAt,
-			FinishedAt: finishedAt,
-		}
-		if err != nil {
-			rec.Err = err.Error()
-		}
-		if storeErr := s.store.RecordExecution(cleanupCtx, rec); storeErr != nil {
-			s.logger.Error("failed to record execution", "job", job.ID, "error", storeErr)
-		}
-	}
-
-	if err != nil {
-		s.logger.Error("job execution failed", "job", job.ID, "error", err)
-	}
-}
-
-// rehydrate loads jobs from the store on startup.
-func (s *Scheduler) rehydrate() error {
-	if s.store == nil {
-		return nil
-	}
-
-	records, err := s.store.ListJobs(s.ctx)
-	if err != nil {
-		return fmt.Errorf("scheduler: list jobs: %w", err)
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now().In(s.location)
-	for _, rec := range records {
-		if !rec.Enabled || rec.State == StateComplete {
-			continue
-		}
-		if _, exists := s.jobs[rec.ID]; exists {
+		fn := s.resolveHandler(rec.ID)
+		if fn == nil {
+			// No handler registered on this instance.
 			continue
 		}
 
@@ -408,17 +223,78 @@ func (s *Scheduler) rehydrate() error {
 			ID:      rec.ID,
 			Name:    rec.Name,
 			Trigger: trigger,
+			Fn:      fn,
 		}
 
-		var next time.Time
-		if !s.clusterMode {
-			// Single-instance: compute next fire time locally.
-			next = trigger.NextFireTime(now)
-		}
-		// Cluster mode: next stays zero; DB drives scheduling decisions.
-		s.jobs[rec.ID] = &entry{job: job, nextRun: next}
+		s.wg.Add(1)
+		go s.executeJob(job)
 	}
-	return nil
+}
+
+// resolveHandler looks up the Fn for a job ID from the handler registry.
+func (s *Scheduler) resolveHandler(id JobID) func(ctx context.Context) error {
+	v, ok := s.handlers.Load(id)
+	if !ok {
+		return nil
+	}
+	return v.(func(ctx context.Context) error)
+}
+
+// executeJob runs a single job with store-level acquire/release.
+func (s *Scheduler) executeJob(job Job) {
+	defer s.wg.Done()
+
+	// Acquire job via store (distributed lock for JDBC, contention check for RAM).
+	if err := s.store.AcquireJob(s.ctx, job.ID, s.instanceID); err != nil {
+		if !errors.Is(err, ErrLockNotAcquired) {
+			s.logger.Error("failed to acquire job", "job", job.ID, "error", err)
+		}
+		return
+	}
+
+	// Build execution context with optional timeout.
+	var execCtx context.Context
+	var execCancel context.CancelFunc
+	if job.Timeout > 0 {
+		execCtx, execCancel = context.WithTimeout(s.ctx, job.Timeout)
+	} else {
+		execCtx, execCancel = context.WithCancel(s.ctx)
+	}
+	defer execCancel()
+
+	startedAt := time.Now()
+	err := job.Fn(execCtx)
+	finishedAt := time.Now().In(s.location)
+
+	// Compute next fire time for release.
+	nextFire := job.Trigger.NextFireTime(finishedAt)
+
+	// Release job back to WAITING with updated next fire time.
+	// Use a detached context so cleanup completes even during shutdown.
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cleanupCancel()
+
+	if releaseErr := s.store.ReleaseJob(cleanupCtx, job.ID, nextFire); releaseErr != nil {
+		s.logger.Error("failed to release job", "job", job.ID, "error", releaseErr)
+	}
+
+	// Record execution.
+	rec := &ExecutionRecord{
+		JobID:      job.ID,
+		Instance:   s.instanceID,
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+	}
+	if err != nil {
+		rec.Err = err.Error()
+	}
+	if storeErr := s.store.RecordExecution(cleanupCtx, rec); storeErr != nil {
+		s.logger.Error("failed to record execution", "job", job.ID, "error", storeErr)
+	}
+
+	if err != nil {
+		s.logger.Error("job execution failed", "job", job.ID, "error", err)
+	}
 }
 
 // recoverStaleJobs resets jobs stuck in ACQUIRED state past the misfire threshold.

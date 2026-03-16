@@ -25,13 +25,11 @@ type JobStore interface {
 	ListJobs(ctx context.Context) ([]*JobRecord, error)
 
 	// ListDueJobs returns jobs in WAITING state whose next fire time is at or before now.
-	// Used in cluster mode for DB-driven dispatch.
+	// Called each poll cycle by the scheduler's run loop.
 	ListDueJobs(ctx context.Context, now time.Time) ([]*JobRecord, error)
 
 	// AcquireJob atomically claims a job for execution (WAITING → ACQUIRED).
 	// Returns ErrLockNotAcquired if another instance already claimed it.
-	// For RAM store, this always succeeds (single-instance).
-	// For JDBC store, this uses TRIGGER_ACCESS table lock.
 	AcquireJob(ctx context.Context, id JobID, instanceID string) error
 
 	// ReleaseJob transitions a job back to WAITING with updated next fire time.
