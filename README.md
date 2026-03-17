@@ -136,7 +136,7 @@ func main() {
 
 The scheduler uses a **store-driven dispatch** model:
 
-1. The run loop polls the store every `pollInterval` (default 15s) via `AcquireNextJobs(now, instanceID)`
+1. The run loop polls the store every `pollInterval` (default 30s) via `AcquireNextJobs(now + pollInterval, instanceID)`
 2. The store atomically selects due jobs and claims them (WAITING → ACQUIRED) in a single transaction
 3. For each acquired job, the scheduler resolves the `Fn` handler from an in-memory registry
 4. Executes the function, then calls `ReleaseJob` to update the next fire time
@@ -271,7 +271,7 @@ scheduler.WithJobStore(store)            // Set job store (required)
 scheduler.WithLogger(logger)             // Set structured logger
 scheduler.WithLocation(loc)              // Set timezone (default: UTC)
 scheduler.WithInstanceID(id)             // Set instance ID (default: hostname)
-scheduler.WithPollInterval(d)            // Store poll interval (default: 15s)
+scheduler.WithPollInterval(d)            // Store poll interval / look-ahead window (default: 30s)
 scheduler.WithMisfireThreshold(d)        // Stale job recovery threshold (default: 10m)
 ```
 

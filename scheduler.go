@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"sync"
 	"time"
 )
 
 const (
 	defaultMisfireThreshold = 10 * time.Minute
-	defaultPollInterval     = 15 * time.Second
-	cleanupTimeout          = 30 * time.Second
+	defaultPollInterval     = 30 * time.Second
+	defaultShutdownTimeout  = 30 * time.Second
+	defaultCleanupTimeout   = 5 * time.Second
 )
 
 // Scheduler orchestrates job scheduling using a pluggable JobStore.
@@ -26,6 +28,8 @@ type Scheduler struct {
 	instanceID       string
 	misfireThreshold time.Duration
 	pollInterval     time.Duration
+	shutdownTimeout  time.Duration
+	cleanupTimeout   time.Duration
 
 	ctx    context.Context
 	wakeUp chan struct{}
@@ -41,6 +45,8 @@ func New(opts ...Option) *Scheduler {
 		location:         time.UTC,
 		misfireThreshold: defaultMisfireThreshold,
 		pollInterval:     defaultPollInterval,
+		shutdownTimeout:  defaultShutdownTimeout,
+		cleanupTimeout:   defaultCleanupTimeout,
 		wakeUp:           make(chan struct{}, 1),
 	}
 
@@ -169,7 +175,28 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 	for {
 		now := time.Now().In(s.location)
-		s.dispatchDueJobs(now)
+		window := now.Add(s.pollInterval)
+
+		records, err := s.store.AcquireNextJobs(s.ctx, window, s.instanceID)
+		if err != nil {
+			s.logger.Error("failed to acquire due jobs from store", "error", err)
+		}
+
+		if len(records) > 0 {
+			// Sort by fire time for precise scheduling.
+			sort.Slice(records, func(i, j int) bool {
+				return records[i].NextFireTime.Before(records[j].NextFireTime)
+			})
+
+			reloop := s.dispatchBatch(records, recoveryC)
+			if s.ctx.Err() != nil {
+				s.waitForInFlight()
+				return nil
+			}
+			if reloop {
+				continue // batch done or interrupted — re-poll immediately
+			}
+		}
 
 		if done := s.waitForEvent(s.pollInterval, recoveryC); done {
 			return nil
@@ -193,43 +220,84 @@ func (s *Scheduler) waitForEvent(wait time.Duration, recoveryC <-chan time.Time)
 		return false
 	case <-s.ctx.Done():
 		timer.Stop()
-		s.wg.Wait()
+		s.waitForInFlight()
 		return true
 	}
 }
 
-// dispatchDueJobs acquires due jobs from the store and dispatches them.
-func (s *Scheduler) dispatchDueJobs(now time.Time) {
-	records, err := s.store.AcquireNextJobs(s.ctx, now, s.instanceID)
-	if err != nil {
-		s.logger.Error("failed to acquire due jobs from store", "error", err)
+// dispatchBatch processes a sorted batch of acquired jobs.
+// For each job, it waits until the fire time, then dispatches.
+// Returns true if the caller should re-poll immediately.
+func (s *Scheduler) dispatchBatch(records []*JobRecord, recoveryC <-chan time.Time) bool {
+	for i, rec := range records {
+		// Wait until fire time.
+		if delay := time.Until(rec.NextFireTime); delay > 0 {
+			interrupted, reloop := s.waitUntil(delay, recoveryC)
+			if interrupted {
+				s.releaseRemaining(records[i:])
+				return reloop
+			}
+		}
+		s.dispatchJob(rec)
+	}
+	return true // batch complete — re-poll immediately for next batch
+}
+
+// waitUntil blocks until duration elapses. Returns (interrupted, shouldReloop).
+// interrupted=true if ctx canceled or wakeUp received.
+// shouldReloop=true if the caller should re-poll (wakeUp), false if shutting down (ctx).
+func (s *Scheduler) waitUntil(d time.Duration, recoveryC <-chan time.Time) (interrupted, reloop bool) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			return false, false
+		case <-s.ctx.Done():
+			return true, false
+		case <-s.wakeUp:
+			return true, true
+		case <-recoveryC:
+			s.recoverStaleJobs()
+			// Continue waiting — recovery doesn't affect current batch.
+		}
+	}
+}
+
+// dispatchJob resolves the handler and launches the job goroutine.
+func (s *Scheduler) dispatchJob(rec *JobRecord) {
+	fn := s.resolveHandler(rec.ID)
+	if fn == nil {
+		_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
 		return
 	}
 
+	trigger, err := triggerFromRecord(rec)
+	if err != nil {
+		s.logger.Error("failed to parse trigger from store", "job", rec.ID, "error", err)
+		_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
+		return
+	}
+
+	job := Job{
+		ID:      rec.ID,
+		Name:    rec.Name,
+		Trigger: trigger,
+		Fn:      fn,
+	}
+
+	s.wg.Add(1)
+	go s.executeJob(job)
+}
+
+// releaseRemaining releases acquired-but-unfired jobs back to WAITING.
+func (s *Scheduler) releaseRemaining(records []*JobRecord) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), s.cleanupTimeout)
+	defer cancel()
 	for _, rec := range records {
-		fn := s.resolveHandler(rec.ID)
-		if fn == nil {
-			// No handler registered on this instance — release immediately.
-			_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
-			continue
+		if err := s.store.ReleaseJob(cleanupCtx, rec.ID, rec.NextFireTime); err != nil && !errors.Is(err, ErrJobNotFound) {
+			s.logger.Error("failed to release unfired job", "job", rec.ID, "error", err)
 		}
-
-		trigger, err := triggerFromRecord(rec)
-		if err != nil {
-			s.logger.Error("failed to parse trigger from store", "job", rec.ID, "error", err)
-			_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
-			continue
-		}
-
-		job := Job{
-			ID:      rec.ID,
-			Name:    rec.Name,
-			Trigger: trigger,
-			Fn:      fn,
-		}
-
-		s.wg.Add(1)
-		go s.executeJob(job)
 	}
 }
 
@@ -265,7 +333,7 @@ func (s *Scheduler) executeJob(job Job) {
 
 	// Release job back to WAITING with updated next fire time.
 	// Use a detached context so cleanup completes even during shutdown.
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), s.cleanupTimeout)
 	defer cleanupCancel()
 
 	if releaseErr := s.store.ReleaseJob(cleanupCtx, job.ID, nextFire); releaseErr != nil {
@@ -300,6 +368,20 @@ func (s *Scheduler) recoverStaleJobs() {
 	}
 	if n > 0 {
 		s.logger.Info("recovered stale jobs", "count", n)
+	}
+}
+
+// waitForInFlight waits for in-flight jobs to finish, bounded by shutdownTimeout.
+func (s *Scheduler) waitForInFlight() {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(s.shutdownTimeout):
+		s.logger.Error("shutdown timeout exceeded, some jobs may still be running", "timeout", s.shutdownTimeout)
 	}
 }
 

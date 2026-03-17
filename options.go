@@ -33,8 +33,30 @@ func WithMisfireThreshold(d time.Duration) Option {
 	return func(sc *Scheduler) { sc.misfireThreshold = d }
 }
 
+// WithShutdownTimeout sets the maximum time Run() waits for in-flight jobs
+// to finish after the context is canceled. Default is 30s.
+// If the timeout is exceeded, Run() returns and logs a warning.
+func WithShutdownTimeout(d time.Duration) Option {
+	return func(sc *Scheduler) {
+		if d > 0 {
+			sc.shutdownTimeout = d
+		}
+	}
+}
+
+// WithCleanupTimeout sets the maximum time for post-execution cleanup
+// (ReleaseJob + RecordExecution) after a job finishes. Default is 5s.
+// Uses a detached context so cleanup completes even during shutdown.
+func WithCleanupTimeout(d time.Duration) Option {
+	return func(sc *Scheduler) {
+		if d > 0 {
+			sc.cleanupTimeout = d
+		}
+	}
+}
+
 // WithPollInterval sets how often the scheduler polls the store for due jobs.
-// Lower values reduce job fire latency but increase store load. Default is 15s.
+// This also controls the look-ahead window for batch acquisition. Default is 30s.
 func WithPollInterval(d time.Duration) Option {
 	return func(sc *Scheduler) {
 		if d > 0 {
