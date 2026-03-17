@@ -6,8 +6,9 @@ A job scheduling library for Go with pluggable job stores and distributed lockin
 
 - **Cron, interval, and one-time triggers** — standard 5-field cron expressions, fixed intervals, or fire-once at a specific time
 - **Register / Reschedule / Delete** jobs at runtime
-- **Pluggable JobStore** — choose between memory (single-instance) or JDBC (clustered)
-- **Distributed locking** — JDBC store uses `TRIGGER_ACCESS` table lock for safe multi-instance deployments
+- **Pluggable JobStore** — choose between memory (single-instance) or JDBC (SQL-backed with optional clustering)
+- **Store-driven dispatch** — the scheduler polls the store for due jobs each cycle, so schedule changes are immediately visible
+- **Distributed locking** — JDBC store with `WithClustered()` uses `TRIGGER_ACCESS` table lock for safe multi-instance deployments
 - **Context-based lifecycle** — `Run(ctx)` blocks until the context is canceled, with graceful shutdown
 
 ## Installation
@@ -100,6 +101,7 @@ func main() {
 
     store := jdbc.New(db, jdbc.Postgres{},
         jdbc.WithInstanceID("worker-1"),
+        jdbc.WithClustered(), // enables TRIGGER_ACCESS row locking
     )
 
     sched := scheduler.New(
@@ -130,6 +132,17 @@ func main() {
 
 ## Architecture
 
+### How It Works
+
+The scheduler uses a **store-driven dispatch** model:
+
+1. The run loop polls the store every `pollInterval` (default 15s) via `AcquireNextJobs(now, instanceID)`
+2. The store atomically selects due jobs and claims them (WAITING → ACQUIRED) in a single transaction
+3. For each acquired job, the scheduler resolves the `Fn` handler from an in-memory registry
+4. Executes the function, then calls `ReleaseJob` to update the next fire time
+
+The store is always the source of truth — there is no in-memory scheduling state.
+
 ### JobStore Interface
 
 The single `JobStore` interface handles both persistence and distributed coordination:
@@ -139,49 +152,69 @@ type JobStore interface {
     SaveJob(ctx context.Context, rec *JobRecord) error
     DeleteJob(ctx context.Context, id JobID) error
     GetJob(ctx context.Context, id JobID) (*JobRecord, error)
-    ListJobs(ctx context.Context) ([]*JobRecord, error)
-    AcquireJob(ctx context.Context, id JobID, instanceID string) error
+    AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*JobRecord, error)
     ReleaseJob(ctx context.Context, id JobID, nextFireTime time.Time) error
     RecordExecution(ctx context.Context, exec *ExecutionRecord) error
+    RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error)
     Close() error
 }
 ```
 
 ### Job Store Types
 
-| Store      | Package           | Clustering | Use Case                     |
-| ---------- | ----------------- | ---------- | ---------------------------- |
-| **Memory** | `jobstore/memory` | No         | Development, single-instance |
-| **JDBC**   | `jobstore/jdbc`   | Yes        | Production, multi-instance   |
+| Store      | Package           | Clustering | Use Case                              |
+| ---------- | ----------------- | ---------- | ------------------------------------- |
+| **Memory** | `jobstore/memory` | No         | Development, single-instance          |
+| **JDBC**   | `jobstore/jdbc`   | Optional   | Persistence, optional multi-instance  |
 
-### JDBC Store — Table Locking
+### JDBC Store — Single vs Clustered
 
-The JDBC store uses three tables:
+```go
+// Single-instance with persistence (no row locking overhead):
+store := jdbc.New(db, jdbc.Postgres{})
 
-| Table                  | Purpose                                                          |
-| ---------------------- | ---------------------------------------------------------------- |
-| `scheduler_jobs`       | Job definitions with state (`WAITING` / `ACQUIRED` / `COMPLETE`) |
-| `scheduler_locks`      | Named lock rows (`TRIGGER_ACCESS`)                               |
-| `scheduler_executions` | Execution audit log                                              |
+// Multi-instance cluster (enables TRIGGER_ACCESS row locking):
+store := jdbc.New(db, jdbc.Postgres{}, jdbc.WithClustered())
+```
 
-**Acquire flow:**
+**Clustered acquire flow:**
 
 ```
 BEGIN tx
   → SELECT ... FROM scheduler_locks WHERE lock_name = 'TRIGGER_ACCESS' FOR UPDATE NOWAIT
-  → UPDATE scheduler_jobs SET state = 'ACQUIRED' WHERE job_id = ? AND state = 'WAITING'
+  → SELECT ... FROM scheduler_jobs WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
+  → UPDATE scheduler_jobs SET state = 'ACQUIRED' ... WHERE job_id = ? AND state = 'WAITING'  (per job)
 COMMIT
 ```
 
-This ensures only one instance claims a job, even under concurrent load.
+**Single-instance acquire flow:**
+
+```
+BEGIN tx
+  → SELECT ... FROM scheduler_jobs WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
+  → UPDATE scheduler_jobs SET state = 'ACQUIRED' ... WHERE job_id = ? AND state = 'WAITING'  (per job)
+COMMIT
+```
+
+Without `WithClustered()`, the lock table is skipped — fewer round trips, but only safe for a single scheduler instance.
+
+### JDBC Store Tables
+
+| Table                  | Purpose                                                          |
+| ---------------------- | ---------------------------------------------------------------- |
+| `scheduler_jobs`       | Job definitions with state (`WAITING` / `ACQUIRED` / `COMPLETE`) |
+| `scheduler_locks`      | Named lock rows (`TRIGGER_ACCESS`) — used only in clustered mode |
+| `scheduler_executions` | Execution audit log                                              |
 
 ### Supported Databases
 
-| Database   | Dialect           | Lock Error    |
-| ---------- | ----------------- | ------------- |
-| PostgreSQL | `jdbc.Postgres{}` | `55P03`       |
-| Oracle     | `jdbc.Oracle{}`   | `ORA-00054`   |
-| SQLite     | `jdbc.SQLite{}`   | `SQLITE_BUSY` |
+| Database   | Dialect           | Lock Error    | Clustering |
+| ---------- | ----------------- | ------------- | ---------- |
+| PostgreSQL | `jdbc.Postgres{}` | `55P03`       | Yes        |
+| Oracle     | `jdbc.Oracle{}`   | `ORA-00054`   | Yes        |
+| SQLite     | `jdbc.SQLite{}`   | `SQLITE_BUSY` | No         |
+
+> SQLite uses file-level locking and does not support `FOR UPDATE NOWAIT`. Use it for single-instance persistence only.
 
 ### Database Schema
 
@@ -234,10 +267,12 @@ sched.Run(ctx context.Context) error
 ### Options
 
 ```go
-scheduler.WithJobStore(store)        // Set job store (memory or jdbc)
-scheduler.WithLogger(logger)         // Set structured logger
-scheduler.WithLocation(loc)          // Set timezone (default: UTC)
-scheduler.WithInstanceID(id)         // Set instance ID (default: hostname)
+scheduler.WithJobStore(store)            // Set job store (required)
+scheduler.WithLogger(logger)             // Set structured logger
+scheduler.WithLocation(loc)              // Set timezone (default: UTC)
+scheduler.WithInstanceID(id)             // Set instance ID (default: hostname)
+scheduler.WithPollInterval(d)            // Store poll interval (default: 15s)
+scheduler.WithMisfireThreshold(d)        // Stale job recovery threshold (default: 10m)
 ```
 
 ### Triggers
@@ -261,12 +296,13 @@ See the [\_examples/](_examples/) directory:
 - [\_examples/postgres/](_examples/postgres/) — clustered with PostgreSQL JDBC store
 - [\_examples/oracle/](_examples/oracle/) — clustered with Oracle JDBC store
 - [\_examples/sqlite/](_examples/sqlite/) — single-instance with SQLite persistence
+- [\_examples/mysql/](_examples/mysql/) — custom MySQL dialect example
 
 ## Project Structure
 
 ```
 scheduler/
-├── scheduler.go        # Scheduler core, run loop, Run()
+├── scheduler.go        # Scheduler core, store-driven run loop
 ├── job.go              # JobID, Job, Trigger interface
 ├── trigger.go          # CronTrigger, OnceTrigger, IntervalTrigger
 ├── interfaces.go       # JobStore interface, JobRecord, ExecutionRecord
@@ -277,7 +313,7 @@ scheduler/
 │   ├── memory/
 │   │   └── memory.go   # In-memory store
 │   └── jdbc/
-│       ├── store.go    # SQL store with table locks
+│       ├── store.go    # SQL store with optional table locks
 │       ├── dialect.go  # Dialect interface + query generators
 │       ├── postgres.go # PostgreSQL dialect
 │       ├── oracle.go   # Oracle dialect

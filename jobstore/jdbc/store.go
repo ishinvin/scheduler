@@ -25,7 +25,7 @@ const (
 	InitSchemaAlways InitializeSchema = "always"
 )
 
-// LockTriggerAccess is the named lock row used by AcquireJob.
+// LockTriggerAccess is the named lock row used by AcquireNextJobs in clustered mode.
 const LockTriggerAccess = "TRIGGER_ACCESS"
 
 // Store implements scheduler.JobStore using a JDBC approach:
@@ -41,6 +41,7 @@ type Store struct {
 	instanceID       string
 	tablePrefix      string
 	initializeSchema InitializeSchema
+	clustered        bool
 }
 
 // table returns a fully qualified table name with prefix, using the dialect's
@@ -66,6 +67,13 @@ func WithTablePrefix(prefix string) Option {
 // WithInstanceID sets the instance identifier for distributed tracking.
 func WithInstanceID(id string) Option {
 	return func(s *Store) { s.instanceID = id }
+}
+
+// WithClustered enables table-level locking in AcquireNextJobs for multi-instance
+// deployments. Without this, the store skips the TRIGGER_ACCESS lock —
+// faster for single-instance, but unsafe with concurrent schedulers.
+func WithClustered() Option {
+	return func(s *Store) { s.clustered = true }
 }
 
 // WithInitializeSchema controls whether the store creates tables on startup.
@@ -191,80 +199,101 @@ func (s *Store) ListJobs(ctx context.Context) ([]*scheduler.JobRecord, error) {
 	return result, rows.Err()
 }
 
-// ListDueJobs returns jobs in WAITING state whose next fire time is at or before now.
-func (s *Store) ListDueJobs(ctx context.Context, now time.Time) ([]*scheduler.JobRecord, error) {
-	query := listDueJobsSQL(s.dialect, s.jobsTable())
-	rows, err := s.db.QueryContext(ctx, query, scheduler.StateWaiting, now)
-	if err != nil {
-		return nil, fmt.Errorf("jdbc store: list due jobs: %w", err)
-	}
-	defer rows.Close()
-
-	var result []*scheduler.JobRecord
-	for rows.Next() {
-		rec, err := s.scanJob(rows)
-		if err != nil {
-			return nil, fmt.Errorf("jdbc store: scan due job: %w", err)
-		}
-		result = append(result, rec)
-	}
-	return result, rows.Err()
-}
-
-// AcquireJob uses the TRIGGER_ACCESS table lock to atomically
-// transition a job from WAITING → ACQUIRED.
+// AcquireNextJobs finds due jobs and claims them (WAITING → ACQUIRED) in a single transaction.
+//
+// In clustered mode, it acquires the TRIGGER_ACCESS row lock first to serialize
+// across instances. In single-instance mode, the lock table is skipped.
 //
 // Flow:
 //  1. BEGIN tx
-//  2. SELECT lock_name FROM scheduler_locks WHERE lock_name = 'TRIGGER_ACCESS' FOR UPDATE NOWAIT
-//  3. UPDATE scheduler_jobs SET state = 'ACQUIRED' WHERE job_id = ? AND state = 'WAITING'
-//  4. COMMIT (releases the TRIGGER_ACCESS row lock)
-func (s *Store) AcquireJob(ctx context.Context, id scheduler.JobID, instanceID string) error {
+//  2. [clustered] SELECT ... FROM scheduler_locks FOR UPDATE NOWAIT
+//  3. SELECT due jobs WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
+//  4. UPDATE each job SET state = 'ACQUIRED'
+//  5. COMMIT
+func (s *Store) AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*scheduler.JobRecord, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("jdbc store: get conn: %w", err)
+		return nil, fmt.Errorf("jdbc store: get conn: %w", err)
 	}
-	defer conn.Close() // best-effort close
+	defer conn.Close()
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("jdbc store: begin tx: %w", err)
+		return nil, fmt.Errorf("jdbc store: begin tx: %w", err)
 	}
 
-	// Step 1: Lock TRIGGER_ACCESS row.
-	lockQuery := s.dialect.LockRowSQL(s.locksTable())
-	var lockName string
-	err = tx.QueryRowContext(ctx, lockQuery, LockTriggerAccess).Scan(&lockName)
-	if err != nil {
-		_ = tx.Rollback()
-		if s.dialect.IsLockNotAvailable(err) {
-			return scheduler.ErrLockNotAcquired
+	// Clustered: acquire TRIGGER_ACCESS row lock to serialize across instances.
+	if s.clustered {
+		lockQuery := s.dialect.LockRowSQL(s.locksTable())
+		var lockName string
+		err = tx.QueryRowContext(ctx, lockQuery, LockTriggerAccess).Scan(&lockName)
+		if err != nil {
+			_ = tx.Rollback()
+			if s.dialect.IsLockNotAvailable(err) {
+				return nil, nil // another instance is working; not an error
+			}
+			return nil, fmt.Errorf("jdbc store: acquire trigger lock: %w", err)
 		}
-		return fmt.Errorf("jdbc store: acquire trigger lock: %w", err)
 	}
 
-	// Step 2: Claim the job — WAITING → ACQUIRED, set acquired_at for stale detection.
-	now := time.Now()
-	claimQuery := acquireJobSQL(s.dialect, s.jobsTable())
-	result, err := tx.ExecContext(ctx, claimQuery,
-		scheduler.StateAcquired, instanceID, now, now, string(id), scheduler.StateWaiting,
-	)
+	// Select due jobs and claim them.
+	acquired, err := s.selectAndClaimDueJobs(ctx, tx, now, instanceID)
 	if err != nil {
 		_ = tx.Rollback()
-		return fmt.Errorf("jdbc store: claim job: %w", err)
+		return nil, err
 	}
 
-	n, _ := result.RowsAffected()
-	if n == 0 {
-		_ = tx.Rollback()
-		return scheduler.ErrLockNotAcquired
-	}
-
-	// Step 3: Commit — releases the TRIGGER_ACCESS row lock.
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("jdbc store: commit claim: %w", err)
+		return nil, fmt.Errorf("jdbc store: commit acquire: %w", err)
 	}
-	return nil
+	return acquired, nil
+}
+
+// selectAndClaimDueJobs queries for due jobs and updates each to ACQUIRED within the given tx.
+func (s *Store) selectAndClaimDueJobs(ctx context.Context, tx *sql.Tx, now time.Time, instanceID string) ([]*scheduler.JobRecord, error) {
+	selectQuery := listDueJobsSQL(s.dialect, s.jobsTable())
+	rows, err := tx.QueryContext(ctx, selectQuery, scheduler.StateWaiting, now)
+	if err != nil {
+		return nil, fmt.Errorf("jdbc store: list due jobs: %w", err)
+	}
+
+	var dueJobs []*scheduler.JobRecord
+	for rows.Next() {
+		rec, err := s.scanJob(rows)
+		if err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("jdbc store: scan due job: %w", err)
+		}
+		dueJobs = append(dueJobs, rec)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("jdbc store: iterate due jobs: %w", err)
+	}
+
+	if len(dueJobs) == 0 {
+		return nil, nil
+	}
+
+	ts := time.Now()
+	claimQuery := acquireJobSQL(s.dialect, s.jobsTable())
+	var acquired []*scheduler.JobRecord
+	for _, rec := range dueJobs {
+		result, err := tx.ExecContext(ctx, claimQuery,
+			scheduler.StateAcquired, instanceID, ts, ts, string(rec.ID), scheduler.StateWaiting,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("jdbc store: claim job %s: %w", rec.ID, err)
+		}
+		n, _ := result.RowsAffected()
+		if n > 0 {
+			rec.State = scheduler.StateAcquired
+			rec.InstanceID = instanceID
+			rec.AcquiredAt = ts
+			acquired = append(acquired, rec)
+		}
+	}
+	return acquired, nil
 }
 
 // ReleaseJob transitions a job from ACQUIRED back to WAITING with the new next fire time.

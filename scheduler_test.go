@@ -239,8 +239,11 @@ func TestRecoverStaleJobs(t *testing.T) {
 	}
 
 	// Simulate a crashed instance: acquire the job but never release it.
-	if err := store.AcquireJob(ctx, "stale-1", "crashed-instance"); err != nil {
-		t.Fatalf("AcquireJob: %v", err)
+	// Wait for the job to become due, then acquire it.
+	time.Sleep(60 * time.Millisecond)
+	acquired, err := store.AcquireNextJobs(ctx, time.Now(), "crashed-instance")
+	if err != nil || len(acquired) == 0 {
+		t.Fatalf("AcquireNextJobs: err=%v, acquired=%d", err, len(acquired))
 	}
 
 	// Verify job is stuck in ACQUIRED.

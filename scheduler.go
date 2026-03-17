@@ -198,24 +198,26 @@ func (s *Scheduler) waitForEvent(wait time.Duration, recoveryC <-chan time.Time)
 	}
 }
 
-// dispatchDueJobs queries the store for due jobs and dispatches them.
+// dispatchDueJobs acquires due jobs from the store and dispatches them.
 func (s *Scheduler) dispatchDueJobs(now time.Time) {
-	records, err := s.store.ListDueJobs(s.ctx, now)
+	records, err := s.store.AcquireNextJobs(s.ctx, now, s.instanceID)
 	if err != nil {
-		s.logger.Error("failed to query due jobs from store", "error", err)
+		s.logger.Error("failed to acquire due jobs from store", "error", err)
 		return
 	}
 
 	for _, rec := range records {
 		fn := s.resolveHandler(rec.ID)
 		if fn == nil {
-			// No handler registered on this instance.
+			// No handler registered on this instance — release immediately.
+			_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
 			continue
 		}
 
 		trigger, err := triggerFromRecord(rec)
 		if err != nil {
 			s.logger.Error("failed to parse trigger from store", "job", rec.ID, "error", err)
+			_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
 			continue
 		}
 
@@ -240,17 +242,9 @@ func (s *Scheduler) resolveHandler(id JobID) func(ctx context.Context) error {
 	return v.(func(ctx context.Context) error)
 }
 
-// executeJob runs a single job with store-level acquire/release.
+// executeJob runs a single already-acquired job.
 func (s *Scheduler) executeJob(job Job) {
 	defer s.wg.Done()
-
-	// Acquire job via store (distributed lock for JDBC, contention check for RAM).
-	if err := s.store.AcquireJob(s.ctx, job.ID, s.instanceID); err != nil {
-		if !errors.Is(err, ErrLockNotAcquired) {
-			s.logger.Error("failed to acquire job", "job", job.ID, "error", err)
-		}
-		return
-	}
 
 	// Build execution context with optional timeout.
 	var execCtx context.Context

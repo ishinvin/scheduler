@@ -73,37 +73,24 @@ func (s *Store) ListJobs(_ context.Context) ([]*scheduler.JobRecord, error) {
 	return result, nil
 }
 
-// ListDueJobs returns jobs in WAITING state whose next fire time is at or before now.
-func (s *Store) ListDueJobs(_ context.Context, now time.Time) ([]*scheduler.JobRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var result []*scheduler.JobRecord
-	for _, job := range s.jobs {
-		if job.State == scheduler.StateWaiting && job.Enabled && !job.NextFireTime.IsZero() && !job.NextFireTime.After(now) {
-			cp := *job
-			result = append(result, &cp)
-		}
-	}
-	return result, nil
-}
-
-// AcquireJob always succeeds for RAM store (single-instance, no contention).
-func (s *Store) AcquireJob(_ context.Context, id scheduler.JobID, instanceID string) error {
+// AcquireNextJobs finds due jobs and marks them ACQUIRED in a single operation.
+func (s *Store) AcquireNextJobs(_ context.Context, now time.Time, instanceID string) ([]*scheduler.JobRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	job, ok := s.jobs[id]
-	if !ok {
-		return scheduler.ErrJobNotFound
+	var result []*scheduler.JobRecord
+	ts := time.Now()
+	for _, job := range s.jobs {
+		if job.State != scheduler.StateWaiting || !job.Enabled || job.NextFireTime.IsZero() || job.NextFireTime.After(now) {
+			continue
+		}
+		job.State = scheduler.StateAcquired
+		job.InstanceID = instanceID
+		job.AcquiredAt = ts
+		job.UpdatedAt = ts
+		cp := *job
+		result = append(result, &cp)
 	}
-	if job.State == scheduler.StateAcquired {
-		return scheduler.ErrLockNotAcquired
-	}
-	now := time.Now()
-	job.State = scheduler.StateAcquired
-	job.InstanceID = instanceID
-	job.AcquiredAt = now
-	job.UpdatedAt = now
-	return nil
+	return result, nil
 }
 
 // ReleaseJob transitions a job back to WAITING with updated next fire time.
