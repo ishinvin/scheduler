@@ -25,15 +25,12 @@ const (
 	InitSchemaAlways InitializeSchema = "always"
 )
 
-// LockTriggerAccess is the named lock row used by AcquireNextJobs in clustered mode.
-const LockTriggerAccess = "TRIGGER_ACCESS"
-
-// Store implements scheduler.JobStore using a JDBC approach:
-// named lock rows (TRIGGER_ACCESS) protect atomic state transitions on the jobs table.
+// Store implements scheduler.JobStore backed by a SQL database.
+// Per-job optimistic locking (WHERE state = 'WAITING') ensures safe concurrent
+// access across multiple scheduler instances without a separate lock table.
 //
 // Tables required:
 //   - {prefix}scheduler_jobs       — job definitions with state and next_fire_time
-//   - {prefix}scheduler_locks      — named lock rows (TRIGGER_ACCESS)
 //   - {prefix}scheduler_executions — execution audit log
 type Store struct {
 	db               *sql.DB
@@ -41,25 +38,21 @@ type Store struct {
 	instanceID       string
 	tablePrefix      string
 	initializeSchema InitializeSchema
-	clustered        bool
 }
 
-// table returns a fully qualified table name with prefix, using the dialect's
-// identifier casing (e.g., lowercase for Postgres, uppercase for Oracle).
+// table returns a fully qualified table name with prefix in the dialect's preferred casing.
 func (s *Store) table(name string) string {
-	return s.dialect.Col(s.tablePrefix + name)
+	return col(s.dialect, s.tablePrefix+name)
 }
 
 func (s *Store) jobsTable() string  { return s.table("scheduler_jobs") }
-func (s *Store) locksTable() string { return s.table("scheduler_locks") }
 func (s *Store) execsTable() string { return s.table("scheduler_executions") }
 
 // Option configures a JDBC Store.
 type Option func(*Store)
 
 // WithTablePrefix sets a prefix for all table names.
-// The dialect's Col() method applies the correct identifier casing.
-// e.g., WithTablePrefix("myapp_") → myapp_scheduler_jobs (Postgres) or MYAPP_SCHEDULER_JOBS (Oracle).
+// e.g., WithTablePrefix("myapp_") → myapp_scheduler_jobs.
 func WithTablePrefix(prefix string) Option {
 	return func(s *Store) { s.tablePrefix = prefix }
 }
@@ -67,13 +60,6 @@ func WithTablePrefix(prefix string) Option {
 // WithInstanceID sets the instance identifier for distributed tracking.
 func WithInstanceID(id string) Option {
 	return func(s *Store) { s.instanceID = id }
-}
-
-// WithClustered enables table-level locking in AcquireNextJobs for multi-instance
-// deployments. Without this, the store skips the TRIGGER_ACCESS lock —
-// faster for single-instance, but unsafe with concurrent schedulers.
-func WithClustered() Option {
-	return func(s *Store) { s.clustered = true }
 }
 
 // WithInitializeSchema controls whether the store creates tables on startup.
@@ -101,8 +87,8 @@ func New(db *sql.DB, dialect Dialect, opts ...Option) *Store {
 	return s
 }
 
-// CreateSchema executes the DDL statements to create all scheduler tables
-// and seed the lock rows. Safe to call repeatedly — uses IF NOT EXISTS / MERGE.
+// CreateSchema executes the DDL statements to create all scheduler tables.
+// Safe to call repeatedly — uses IF NOT EXISTS / MERGE.
 func (s *Store) CreateSchema(ctx context.Context) error {
 	ddl := s.SchemaSQL()
 	for _, stmt := range splitStatements(ddl) {
@@ -134,17 +120,14 @@ func (s *Store) SaveJob(ctx context.Context, job *scheduler.JobRecord) error {
 	query := s.dialect.UpsertJobSQL(s.jobsTable())
 	now := time.Now()
 
-	var timeoutStr string
-	if job.Timeout > 0 {
-		timeoutStr = job.Timeout.String()
-	}
+	timeoutSecs := int64(job.Timeout / time.Second)
 
 	_, err := s.db.ExecContext(ctx, query,
 		string(job.ID),
 		job.Name,
 		job.TriggerType,
 		job.TriggerValue,
-		timeoutStr,
+		timeoutSecs,
 		job.NextFireTime,
 		scheduler.StateWaiting,
 		job.Enabled,
@@ -206,16 +189,14 @@ func (s *Store) ListJobs(ctx context.Context) ([]*scheduler.JobRecord, error) {
 }
 
 // AcquireNextJobs finds due jobs and claims them (WAITING → ACQUIRED) in a single transaction.
-//
-// In clustered mode, it acquires the TRIGGER_ACCESS row lock first to serialize
-// across instances. In single-instance mode, the lock table is skipped.
+// Safe for concurrent use across multiple instances — each job's UPDATE uses
+// WHERE state = 'WAITING' as an optimistic lock, so only one instance can win.
 //
 // Flow:
 //  1. BEGIN tx
-//  2. [clustered] SELECT ... FROM scheduler_locks FOR UPDATE NOWAIT
-//  3. SELECT due jobs WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
-//  4. UPDATE each job SET state = 'ACQUIRED'
-//  5. COMMIT
+//  2. SELECT due jobs WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
+//  3. UPDATE each job SET state = 'ACQUIRED' WHERE state = 'WAITING'
+//  4. COMMIT
 func (s *Store) AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*scheduler.JobRecord, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -228,21 +209,6 @@ func (s *Store) AcquireNextJobs(ctx context.Context, now time.Time, instanceID s
 		return nil, fmt.Errorf("jdbc store: begin tx: %w", err)
 	}
 
-	// Clustered: acquire TRIGGER_ACCESS row lock to serialize across instances.
-	if s.clustered {
-		lockQuery := s.dialect.LockRowSQL(s.locksTable())
-		var lockName string
-		err = tx.QueryRowContext(ctx, lockQuery, LockTriggerAccess).Scan(&lockName)
-		if err != nil {
-			_ = tx.Rollback()
-			if s.dialect.IsLockNotAvailable(err) {
-				return nil, nil // another instance is working; not an error
-			}
-			return nil, fmt.Errorf("jdbc store: acquire trigger lock: %w", err)
-		}
-	}
-
-	// Select due jobs and claim them.
 	acquired, err := s.selectAndClaimDueJobs(ctx, tx, now, instanceID)
 	if err != nil {
 		_ = tx.Rollback()
@@ -331,13 +297,15 @@ func (s *Store) RecordExecution(ctx context.Context, exec *scheduler.ExecutionRe
 	return nil
 }
 
-// RecoverStaleJobs resets jobs stuck in ACQUIRED state longer than the threshold
-// back to WAITING. Returns the number of recovered jobs.
+// RecoverStaleJobs resets jobs stuck in ACQUIRED state longer than the threshold.
+// For jobs with a timeout_secs longer than the threshold, the timeout is used instead
+// to avoid recovering jobs that are still legitimately running.
 func (s *Store) RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error) {
-	cutoff := time.Now().Add(-threshold)
+	now := time.Now()
+	thresholdSecs := int64(threshold / time.Second)
 	query := recoverStaleJobsSQL(s.dialect, s.jobsTable())
 	result, err := s.db.ExecContext(ctx, query,
-		scheduler.StateWaiting, time.Now(), scheduler.StateAcquired, cutoff,
+		scheduler.StateWaiting, now, scheduler.StateAcquired, thresholdSecs, now,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("jdbc store: recover stale jobs: %w", err)
@@ -381,19 +349,17 @@ type scanner interface {
 func (*Store) scanJob(sc scanner) (*scheduler.JobRecord, error) {
 	var rec scheduler.JobRecord
 	var id string
-	var timeoutStr string
+	var timeoutSecs int64
 	var instanceID sql.NullString
 	var acquiredAt sql.NullTime
-	err := sc.Scan(&id, &rec.Name, &rec.TriggerType, &rec.TriggerValue, &timeoutStr,
+	err := sc.Scan(&id, &rec.Name, &rec.TriggerType, &rec.TriggerValue, &timeoutSecs,
 		&rec.NextFireTime, &rec.State, &instanceID, &acquiredAt, &rec.Enabled,
 		&rec.CreatedAt, &rec.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	rec.ID = scheduler.JobID(id)
-	if timeoutStr != "" {
-		rec.Timeout, _ = time.ParseDuration(timeoutStr)
-	}
+	rec.Timeout = time.Duration(timeoutSecs) * time.Second
 	rec.InstanceID = instanceID.String
 	rec.AcquiredAt = acquiredAt.Time
 	return &rec, nil

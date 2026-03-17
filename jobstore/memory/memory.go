@@ -117,20 +117,30 @@ func (*Store) RecordExecution(_ context.Context, _ *scheduler.ExecutionRecord) e
 }
 
 // RecoverStaleJobs resets jobs stuck in ACQUIRED state longer than the threshold.
+// For jobs with a Timeout longer than the threshold, the timeout is used instead
+// to avoid recovering jobs that are still legitimately running.
 func (s *Store) RecoverStaleJobs(_ context.Context, threshold time.Duration) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cutoff := time.Now().Add(-threshold)
+	now := time.Now()
 	recovered := 0
 	for _, job := range s.jobs {
-		if job.State != scheduler.StateAcquired || job.AcquiredAt.IsZero() || !job.AcquiredAt.Before(cutoff) {
+		if job.State != scheduler.StateAcquired || job.AcquiredAt.IsZero() {
+			continue
+		}
+		// Use the longer of misfireThreshold and job timeout.
+		staleAfter := threshold
+		if job.Timeout > staleAfter {
+			staleAfter = job.Timeout
+		}
+		if !job.AcquiredAt.Before(now.Add(-staleAfter)) {
 			continue
 		}
 		job.State = scheduler.StateWaiting
 		job.InstanceID = ""
 		job.AcquiredAt = time.Time{}
-		job.UpdatedAt = time.Now()
+		job.UpdatedAt = now
 		recovered++
 	}
 	return recovered, nil

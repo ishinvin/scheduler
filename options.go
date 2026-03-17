@@ -27,7 +27,8 @@ func WithInstanceID(id string) Option {
 }
 
 // WithMisfireThreshold sets how long a job can stay in ACQUIRED state before
-// being considered stale and recovered back to WAITING. Default is 10 minutes.
+// being considered stale and recovered back to WAITING. Default is 1 minute.
+// Jobs with a timeout longer than this threshold use their timeout instead.
 // Set to 0 to disable stale job recovery.
 func WithMisfireThreshold(d time.Duration) Option {
 	return func(sc *Scheduler) { sc.misfireThreshold = d }
@@ -55,8 +56,9 @@ func WithCleanupTimeout(d time.Duration) Option {
 	}
 }
 
-// WithPollInterval sets how often the scheduler polls the store for due jobs.
-// This also controls the look-ahead window for batch acquisition. Default is 30s.
+// WithPollInterval sets the maximum time between store polls. Default is 15s.
+// Signals handle prompt wake-up for job completion, register, reschedule, and delete.
+// This interval acts as a safety fallback for missed signals or cross-instance pickup.
 func WithPollInterval(d time.Duration) Option {
 	return func(sc *Scheduler) {
 		if d > 0 {
