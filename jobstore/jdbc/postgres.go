@@ -5,7 +5,7 @@ import (
 )
 
 // pgColumns is the column list for PostgreSQL SELECT queries.
-const pgColumns = `job_id, name, trigger_type, trigger_value,
+const pgColumns = `job_id, name, trigger_type, trigger_value, timeout,
 		        next_fire_time, state, instance_id, acquired_at, enabled, created_at, updated_at`
 
 // Postgres implements Dialect for PostgreSQL.
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS ` + prefix + `scheduler_jobs (
     name           TEXT NOT NULL,
     trigger_type   TEXT NOT NULL,
     trigger_value  TEXT NOT NULL,
+    timeout        TEXT NOT NULL DEFAULT '',
     next_fire_time TIMESTAMPTZ,
     state          TEXT NOT NULL DEFAULT 'WAITING',
     instance_id    TEXT,
@@ -58,13 +59,14 @@ CREATE INDEX IF NOT EXISTS idx_` + prefix + `sched_exec_job
 
 func (Postgres) UpsertJobSQL(table string) string {
 	return fmt.Sprintf(`
-		INSERT INTO %s (job_id, name, trigger_type, trigger_value,
+		INSERT INTO %s (job_id, name, trigger_type, trigger_value, timeout,
 		                next_fire_time, state, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (job_id) DO UPDATE SET
 			name = EXCLUDED.name,
 			trigger_type = EXCLUDED.trigger_type,
 			trigger_value = EXCLUDED.trigger_value,
+			timeout = EXCLUDED.timeout,
 			next_fire_time = EXCLUDED.next_fire_time,
 			enabled = EXCLUDED.enabled,
 			updated_at = EXCLUDED.updated_at

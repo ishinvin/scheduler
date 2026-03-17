@@ -19,11 +19,12 @@ func main() {
 
 	ctx := context.Background()
 
-	// Cron trigger: every minute.
+	// Cron trigger: every minute, with a 10s execution timeout.
 	sched.Register(ctx, scheduler.Job{
 		ID:      "cron-job",
 		Name:    "Every minute",
 		Trigger: must(scheduler.NewCronTrigger("* * * * *")),
+		Timeout: 10 * time.Second,
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "cron job fired")
 			return nil

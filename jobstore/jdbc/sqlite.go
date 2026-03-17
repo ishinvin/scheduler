@@ -6,7 +6,7 @@ import (
 )
 
 // sqliteColumns is the column list for SQLite SELECT queries.
-const sqliteColumns = `job_id, name, trigger_type, trigger_value,
+const sqliteColumns = `job_id, name, trigger_type, trigger_value, timeout,
 		        next_fire_time, state, instance_id, acquired_at, enabled, created_at, updated_at`
 
 // SQLite implements Dialect for SQLite.
@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS ` + prefix + `scheduler_jobs (
     name           TEXT NOT NULL,
     trigger_type   TEXT NOT NULL,
     trigger_value  TEXT NOT NULL,
+    timeout        TEXT NOT NULL DEFAULT '',
     next_fire_time TEXT,
     state          TEXT NOT NULL DEFAULT 'WAITING',
     instance_id    TEXT,
@@ -65,13 +66,14 @@ CREATE INDEX IF NOT EXISTS idx_` + prefix + `sched_exec_job
 
 func (SQLite) UpsertJobSQL(table string) string {
 	return fmt.Sprintf(`
-		INSERT INTO %s (job_id, name, trigger_type, trigger_value,
+		INSERT INTO %s (job_id, name, trigger_type, trigger_value, timeout,
 		                next_fire_time, state, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (job_id) DO UPDATE SET
 			name = excluded.name,
 			trigger_type = excluded.trigger_type,
 			trigger_value = excluded.trigger_value,
+			timeout = excluded.timeout,
 			next_fire_time = excluded.next_fire_time,
 			enabled = excluded.enabled,
 			updated_at = excluded.updated_at

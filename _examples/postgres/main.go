@@ -56,6 +56,7 @@ func main() {
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",
 		Trigger: must(scheduler.NewCronTrigger("*/5 * * * *")), // every 5 minutes
+		Timeout: 2 * time.Minute,                               // timeout persists to DB
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "running cleanup...")
 			return nil

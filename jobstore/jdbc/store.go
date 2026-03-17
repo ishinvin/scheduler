@@ -134,11 +134,17 @@ func (s *Store) SaveJob(ctx context.Context, job *scheduler.JobRecord) error {
 	query := s.dialect.UpsertJobSQL(s.jobsTable())
 	now := time.Now()
 
+	var timeoutStr string
+	if job.Timeout > 0 {
+		timeoutStr = job.Timeout.String()
+	}
+
 	_, err := s.db.ExecContext(ctx, query,
 		string(job.ID),
 		job.Name,
 		job.TriggerType,
 		job.TriggerValue,
+		timeoutStr,
 		job.NextFireTime,
 		scheduler.StateWaiting,
 		job.Enabled,
@@ -366,15 +372,19 @@ type scanner interface {
 func (*Store) scanJob(sc scanner) (*scheduler.JobRecord, error) {
 	var rec scheduler.JobRecord
 	var id string
+	var timeoutStr string
 	var instanceID sql.NullString
 	var acquiredAt sql.NullTime
-	err := sc.Scan(&id, &rec.Name, &rec.TriggerType, &rec.TriggerValue,
+	err := sc.Scan(&id, &rec.Name, &rec.TriggerType, &rec.TriggerValue, &timeoutStr,
 		&rec.NextFireTime, &rec.State, &instanceID, &acquiredAt, &rec.Enabled,
 		&rec.CreatedAt, &rec.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	rec.ID = scheduler.JobID(id)
+	if timeoutStr != "" {
+		rec.Timeout, _ = time.ParseDuration(timeoutStr)
+	}
 	rec.InstanceID = instanceID.String
 	rec.AcquiredAt = acquiredAt.Time
 	return &rec, nil

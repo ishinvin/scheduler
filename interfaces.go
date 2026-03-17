@@ -61,8 +61,9 @@ type Logger interface {
 type JobRecord struct {
 	ID           JobID
 	Name         string
-	TriggerType  string // "cron", "once", "interval"
-	TriggerValue string // cron expr, RFC3339 time, or duration string
+	TriggerType  string        // "cron", "once", "interval"
+	TriggerValue string        // cron expr, RFC3339 time, or duration string
+	Timeout      time.Duration // per-execution timeout; 0 = no timeout
 	NextFireTime time.Time
 	State        JobState
 	InstanceID   string // which instance owns it (when ACQUIRED)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"sort"
 	"sync"
@@ -284,6 +283,7 @@ func (s *Scheduler) dispatchJob(rec *JobRecord) {
 		Name:    rec.Name,
 		Trigger: trigger,
 		Fn:      fn,
+		Timeout: rec.Timeout,
 	}
 
 	s.wg.Add(1)
@@ -397,6 +397,7 @@ func jobToRecord(job *Job, nextFire time.Time) *JobRecord {
 	rec := &JobRecord{
 		ID:           job.ID,
 		Name:         job.Name,
+		Timeout:      job.Timeout,
 		NextFireTime: nextFire,
 		State:        StateWaiting,
 		Enabled:      true,
@@ -437,14 +438,4 @@ func triggerFromRecord(rec *JobRecord) (Trigger, error) {
 	default:
 		return nil, fmt.Errorf("unknown trigger type: %s", rec.TriggerType)
 	}
-}
-
-type slogLogger struct{}
-
-func (*slogLogger) Info(msg string, keysAndValues ...any) {
-	slog.Info(msg, keysAndValues...)
-}
-
-func (*slogLogger) Error(msg string, keysAndValues ...any) {
-	slog.Error(msg, keysAndValues...)
 }

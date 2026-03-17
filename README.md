@@ -43,11 +43,12 @@ func main() {
 
     ctx := context.Background()
 
-    // Register a cron job
+    // Register a cron job with a 30s execution timeout
     sched.Register(ctx, scheduler.Job{
-        ID:   "daily-report",
-        Name: "Generate daily report",
+        ID:      "daily-report",
+        Name:    "Generate daily report",
         Trigger: must(scheduler.NewCronTrigger("0 9 * * *")),
+        Timeout: 30 * time.Second, // cancel if execution exceeds 30s
         Fn: func(ctx context.Context) error {
             fmt.Println("generating report...")
             return nil
@@ -273,6 +274,8 @@ scheduler.WithLocation(loc)              // Set timezone (default: UTC)
 scheduler.WithInstanceID(id)             // Set instance ID (default: hostname)
 scheduler.WithPollInterval(d)            // Store poll interval / look-ahead window (default: 30s)
 scheduler.WithMisfireThreshold(d)        // Stale job recovery threshold (default: 10m)
+scheduler.WithShutdownTimeout(d)         // Max wait for in-flight jobs on shutdown (default: 30s)
+scheduler.WithCleanupTimeout(d)          // Max wait for post-execution DB cleanup (default: 5s)
 ```
 
 ### Triggers
@@ -307,6 +310,7 @@ scheduler/
 ├── trigger.go          # CronTrigger, OnceTrigger, IntervalTrigger
 ├── interfaces.go       # JobStore interface, JobRecord, ExecutionRecord
 ├── options.go          # Functional options
+├── logger.go           # Default slog logger
 ├── errors.go           # Sentinel errors
 ├── scheduler_test.go   # Tests
 ├── jobstore/
