@@ -6,11 +6,11 @@ import (
 )
 
 // JobStore is the single persistence and coordination interface.
-// Implementations handle storage, state transitions, and distributed locking internally.
+// Implementations handle storage and state transitions internally.
 //
 // Two built-in implementations:
 //   - memory.Store — in-memory, single-instance
-//   - jdbc.Store   — SQL-backed, optional clustering via WithClustered()
+//   - jdbc.Store   — SQL-backed, safe for multi-instance deployments
 type JobStore interface {
 	// SaveJob persists or updates a job definition.
 	SaveJob(ctx context.Context, rec *JobRecord) error

@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS scheduler_jobs (
     name           TEXT NOT NULL,
     trigger_type   TEXT NOT NULL,
     trigger_value  TEXT NOT NULL,
-    metadata       JSONB DEFAULT '{}',
+    timeout_secs   INTEGER NOT NULL DEFAULT 0,
     next_fire_time TIMESTAMPTZ,
     state          TEXT NOT NULL DEFAULT 'WAITING',
     instance_id    TEXT,
@@ -23,13 +23,6 @@ CREATE TABLE IF NOT EXISTS scheduler_jobs (
 CREATE INDEX IF NOT EXISTS idx_sched_jobs_fire
     ON scheduler_jobs (next_fire_time)
     WHERE state = 'WAITING' AND enabled = TRUE;
-
-CREATE TABLE IF NOT EXISTS scheduler_locks (
-    lock_name TEXT PRIMARY KEY
-);
-
-INSERT INTO scheduler_locks (lock_name) VALUES ('TRIGGER_ACCESS') ON CONFLICT DO NOTHING;
-INSERT INTO scheduler_locks (lock_name) VALUES ('STATE_ACCESS')   ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS scheduler_executions (
     id          BIGSERIAL PRIMARY KEY,

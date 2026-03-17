@@ -1,14 +1,14 @@
 # scheduler
 
-A job scheduling library for Go with pluggable job stores and distributed locking.
+A job scheduling library for Go with pluggable job stores and multi-instance support.
 
 ## Features
 
 - **Cron, interval, and one-time triggers** — standard 5-field cron expressions, fixed intervals, or fire-once at a specific time
 - **Register / Reschedule / Delete** jobs at runtime
-- **Pluggable JobStore** — choose between memory (single-instance) or JDBC (SQL-backed with optional clustering)
+- **Pluggable JobStore** — choose between memory (single-instance) or JDBC (SQL-backed, multi-instance safe)
 - **Store-driven dispatch** — the scheduler polls the store for due jobs each cycle, so schedule changes are immediately visible
-- **Distributed locking** — JDBC store with `WithClustered()` uses `TRIGGER_ACCESS` table lock for safe multi-instance deployments
+- **Per-job optimistic locking** — `WHERE state = 'WAITING'` ensures only one instance acquires each job, no separate lock table needed
 - **Context-based lifecycle** — `Run(ctx)` blocks until the context is canceled, with graceful shutdown
 
 ## Installation
@@ -83,7 +83,7 @@ func must[T any](v T, err error) T {
 }
 ```
 
-### Clustered (JDBC Store + PostgreSQL)
+### Multi-Instance (JDBC Store + PostgreSQL)
 
 ```go
 package main
@@ -105,7 +105,6 @@ func main() {
 
     store := jdbc.New(db, jdbc.Postgres{},
         jdbc.WithInstanceID("worker-1"),
-        jdbc.WithClustered(), // enables TRIGGER_ACCESS row locking
     )
 
     ctx := context.Background()
@@ -143,16 +142,17 @@ func main() {
 
 The scheduler uses a **store-driven dispatch** model:
 
-1. The run loop polls the store every `pollInterval` (default 30s) via `AcquireNextJobs(now + pollInterval, instanceID)`
+1. The run loop polls the store every `pollInterval` (default 15s) via `AcquireNextJobs(now, instanceID)`
 2. The store atomically selects due jobs and claims them (WAITING → ACQUIRED) in a single transaction
-3. For each acquired job, the scheduler resolves the `Fn` handler from an in-memory registry
-4. Executes the function, then calls `ReleaseJob` to update the next fire time
+3. Each job's UPDATE uses `WHERE state = 'WAITING'` as an optimistic lock — only one instance wins
+4. For each acquired job, the scheduler resolves the `Fn` handler from an in-memory registry
+5. Executes the function, then calls `ReleaseJob` to update the next fire time
 
 The store is always the source of truth — there is no in-memory scheduling state.
 
 ### JobStore Interface
 
-The single `JobStore` interface handles both persistence and distributed coordination:
+The single `JobStore` interface handles both persistence and coordination:
 
 ```go
 type JobStore interface {
@@ -169,56 +169,37 @@ type JobStore interface {
 
 ### Job Store Types
 
-| Store      | Package           | Clustering | Use Case                              |
-| ---------- | ----------------- | ---------- | ------------------------------------- |
-| **Memory** | `jobstore/memory` | No         | Development, single-instance          |
-| **JDBC**   | `jobstore/jdbc`   | Optional   | Persistence, optional multi-instance  |
+| Store      | Package           | Multi-Instance | Use Case                     |
+| ---------- | ----------------- | -------------- | ---------------------------- |
+| **Memory** | `jobstore/memory` | No             | Development, single-instance |
+| **JDBC**   | `jobstore/jdbc`   | Yes            | Persistence, multi-instance  |
 
-### JDBC Store — Single vs Clustered
-
-```go
-// Single-instance with persistence (no row locking overhead):
-store := jdbc.New(db, jdbc.Postgres{})
-
-// Multi-instance cluster (enables TRIGGER_ACCESS row locking):
-store := jdbc.New(db, jdbc.Postgres{}, jdbc.WithClustered())
-```
-
-**Clustered acquire flow:**
+### JDBC Store — Acquire Flow
 
 ```
 BEGIN tx
-  → SELECT ... FROM scheduler_locks WHERE lock_name = 'TRIGGER_ACCESS' FOR UPDATE NOWAIT
-  → SELECT ... FROM scheduler_jobs WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
-  → UPDATE scheduler_jobs SET state = 'ACQUIRED' ... WHERE job_id = ? AND state = 'WAITING'  (per job)
+  SELECT ... FROM scheduler_jobs WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
+  UPDATE scheduler_jobs SET state = 'ACQUIRED' ... WHERE job_id = ? AND state = 'WAITING'  (per job)
 COMMIT
 ```
 
-**Single-instance acquire flow:**
-
-```
-BEGIN tx
-  → SELECT ... FROM scheduler_jobs WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
-  → UPDATE scheduler_jobs SET state = 'ACQUIRED' ... WHERE job_id = ? AND state = 'WAITING'  (per job)
-COMMIT
-```
-
-Without `WithClustered()`, the lock table is skipped — fewer round trips, but only safe for a single scheduler instance.
+The `AND state = 'WAITING'` condition on each UPDATE acts as an optimistic lock. If two instances try to acquire the same job concurrently, only one gets `RowsAffected = 1` — the other sees 0 and skips it.
 
 ### JDBC Store Tables
 
 | Table                  | Purpose                                                          |
 | ---------------------- | ---------------------------------------------------------------- |
 | `scheduler_jobs`       | Job definitions with state (`WAITING` / `ACQUIRED` / `COMPLETE`) |
-| `scheduler_locks`      | Named lock rows (`TRIGGER_ACCESS`) — used only in clustered mode |
 | `scheduler_executions` | Execution audit log                                              |
 
 ### Supported Databases
 
-| Database   | Dialect           | Lock Error    | Clustering |
-| ---------- | ----------------- | ------------- | ---------- |
-| PostgreSQL | `jdbc.Postgres{}` | `55P03`       | Yes        |
-| Oracle     | `jdbc.Oracle{}`   | `ORA-00054`   | Yes        |
+| Database   | Dialect           |
+| ---------- | ----------------- |
+| PostgreSQL | `jdbc.Postgres{}` |
+| Oracle     | `jdbc.Oracle{}`   |
+
+Custom dialects (e.g., MySQL) can be implemented via the `jdbc.Dialect` interface — see [\_examples/mysql/](_examples/mysql/).
 
 ### Database Schema
 
@@ -274,8 +255,8 @@ scheduler.WithJobStore(store)            // Set job store (required)
 scheduler.WithLogger(logger)             // Set structured logger
 scheduler.WithLocation(loc)              // Set timezone (default: UTC)
 scheduler.WithInstanceID(id)             // Set instance ID (default: hostname)
-scheduler.WithPollInterval(d)            // Store poll interval / look-ahead window (default: 30s)
-scheduler.WithMisfireThreshold(d)        // Stale job recovery threshold (default: 10m)
+scheduler.WithPollInterval(d)            // Safety fallback poll interval (default: 15s)
+scheduler.WithMisfireThreshold(d)        // Stale job recovery threshold (default: 1m)
 scheduler.WithShutdownTimeout(d)         // Max wait for in-flight jobs on shutdown (default: 30s)
 scheduler.WithCleanupTimeout(d)          // Max wait for post-execution DB cleanup (default: 5s)
 ```
@@ -298,8 +279,8 @@ trigger := scheduler.NewOnceTrigger(time.Now().Add(5 * time.Minute))
 See the [\_examples/](_examples/) directory:
 
 - [\_examples/memory/](_examples/memory/) — single-instance with cron, interval, and once triggers
-- [\_examples/postgres/](_examples/postgres/) — clustered with PostgreSQL JDBC store
-- [\_examples/oracle/](_examples/oracle/) — clustered with Oracle JDBC store
+- [\_examples/postgres/](_examples/postgres/) — multi-instance with PostgreSQL JDBC store
+- [\_examples/oracle/](_examples/oracle/) — multi-instance with Oracle JDBC store
 - [\_examples/mysql/](_examples/mysql/) — custom MySQL dialect example
 
 ## Project Structure
@@ -318,14 +299,14 @@ scheduler/
 │   ├── memory/
 │   │   └── memory.go   # In-memory store
 │   └── jdbc/
-│       ├── store.go    # SQL store with optional table locks
+│       ├── store.go    # SQL store with per-job optimistic locking
 │       ├── dialect.go  # Dialect interface + query generators
 │       ├── postgres.go # PostgreSQL dialect
 │       └── oracle.go   # Oracle dialect
 └── _examples/
     ├── memory/         # In-memory example
-    ├── postgres/       # PostgreSQL clustered example
-    ├── oracle/         # Oracle clustered example
+    ├── postgres/       # PostgreSQL multi-instance example
+    ├── oracle/         # Oracle multi-instance example
     └── mysql/          # MySQL custom dialect example
 ```
 

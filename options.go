@@ -6,7 +6,7 @@ import "time"
 type Option func(*Scheduler)
 
 // WithJobStore sets the job store implementation.
-// Use memory.New() for single-instance or jdbc.New() for clustered deployments.
+// Use memory.New() for single-instance or jdbc.New() for multi-instance deployments.
 func WithJobStore(s JobStore) Option {
 	return func(sc *Scheduler) { sc.store = s }
 }
