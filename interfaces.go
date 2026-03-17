@@ -37,6 +37,10 @@ type JobStore interface {
 	// given threshold back to WAITING. Returns the number of recovered jobs.
 	RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error)
 
+	// NextFireTime returns the earliest next_fire_time among WAITING enabled jobs.
+	// Returns zero time if no jobs are scheduled.
+	NextFireTime(ctx context.Context) (time.Time, error)
+
 	// PurgeExecutions deletes execution records older than the given time.
 	// Returns the number of deleted records.
 	PurgeExecutions(ctx context.Context, before time.Time) (int, error)

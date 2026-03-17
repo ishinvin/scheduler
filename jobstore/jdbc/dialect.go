@@ -63,13 +63,9 @@ func getJobSQL(d Dialect, table string) string {
 		cols(d), table, col(d, "job_id"), d.Placeholder(1))
 }
 
-func listJobsSQL(d Dialect, table string) string {
-	return fmt.Sprintf("SELECT %s FROM %s", cols(d), table)
-}
-
 func listDueJobsSQL(d Dialect, table string) string {
 	return fmt.Sprintf(
-		"SELECT %s FROM %s WHERE %s = %s AND %s = %s AND %s <= %s ORDER BY %s",
+		"SELECT %s FROM %s WHERE %s = %s AND %s = %s AND %s <= %s ORDER BY %s FOR UPDATE SKIP LOCKED",
 		cols(d), table,
 		col(d, "state"), d.Placeholder(1),
 		col(d, "enabled"), d.BooleanTrue(),
@@ -107,6 +103,13 @@ func insertExecutionSQL(d Dialect, table string) string {
 		table,
 		col(d, "job_id"), col(d, "instance_id"), col(d, "started_at"), col(d, "finished_at"), col(d, "error"),
 		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5)) //nolint:mnd // placeholder indices
+}
+
+func nextFireTimeSQL(d Dialect, table string) string {
+	return fmt.Sprintf("SELECT MIN(%s) FROM %s WHERE %s = %s AND %s = %s",
+		col(d, "next_fire_time"), table,
+		col(d, "state"), d.Placeholder(1),
+		col(d, "enabled"), d.BooleanTrue())
 }
 
 func purgeExecutionsSQL(d Dialect, table string) string {

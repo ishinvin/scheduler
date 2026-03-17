@@ -210,7 +210,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			}
 		}
 
-		if done := s.waitForEvent(s.pollInterval, recoveryC); done {
+		if done := s.waitForEvent(s.nextPollWait(), recoveryC); done {
 			return nil
 		}
 	}
@@ -426,6 +426,23 @@ func (s *Scheduler) waitForInFlight() {
 	case <-time.After(s.shutdownTimeout):
 		s.logger.Error("shutdown timeout exceeded, some jobs may still be running", "timeout", s.shutdownTimeout)
 	}
+}
+
+// nextPollWait returns how long to sleep before the next poll.
+// Uses the store's earliest fire time for precision; falls back to pollInterval.
+func (s *Scheduler) nextPollWait() time.Duration {
+	next, err := s.store.NextFireTime(s.ctx)
+	if err != nil || next.IsZero() {
+		return s.pollInterval
+	}
+	wait := time.Until(next)
+	if wait <= 0 {
+		return 0
+	}
+	if wait > s.pollInterval {
+		return s.pollInterval
+	}
+	return wait
 }
 
 func (s *Scheduler) signal() {

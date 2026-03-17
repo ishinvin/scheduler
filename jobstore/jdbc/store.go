@@ -12,7 +12,6 @@ import (
 )
 
 // InitializeSchema controls whether the JDBC store creates tables on startup.
-// Controls whether the JDBC store creates tables on startup.
 type InitializeSchema string
 
 const (
@@ -168,33 +167,14 @@ func (s *Store) GetJob(ctx context.Context, id scheduler.JobID) (*scheduler.JobR
 	return rec, nil
 }
 
-// ListJobs returns all persisted jobs.
-func (s *Store) ListJobs(ctx context.Context) ([]*scheduler.JobRecord, error) {
-	query := listJobsSQL(s.dialect, s.jobsTable())
-	rows, err := s.db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("jdbc store: list jobs: %w", err)
-	}
-	defer rows.Close() // best-effort close
-
-	var result []*scheduler.JobRecord
-	for rows.Next() {
-		rec, err := s.scanJob(rows)
-		if err != nil {
-			return nil, fmt.Errorf("jdbc store: scan job: %w", err)
-		}
-		result = append(result, rec)
-	}
-	return result, rows.Err()
-}
-
 // AcquireNextJobs finds due jobs and claims them (WAITING → ACQUIRED) in a single transaction.
-// Safe for concurrent use across multiple instances — each job's UPDATE uses
-// WHERE state = 'WAITING' as an optimistic lock, so only one instance can win.
+// Uses FOR UPDATE SKIP LOCKED so concurrent instances each see only unlocked rows,
+// distributing work fairly. The per-row UPDATE still includes WHERE state = 'WAITING'
+// as a safety net against edge cases (e.g., recovery between SELECT and UPDATE).
 //
 // Flow:
 //  1. BEGIN tx
-//  2. SELECT due jobs WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
+//  2. SELECT due jobs ... FOR UPDATE SKIP LOCKED
 //  3. UPDATE each job SET state = 'ACQUIRED' WHERE state = 'WAITING'
 //  4. COMMIT
 func (s *Store) AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*scheduler.JobRecord, error) {
@@ -312,6 +292,16 @@ func (s *Store) RecoverStaleJobs(ctx context.Context, threshold time.Duration) (
 	}
 	n, _ := result.RowsAffected()
 	return int(n), nil
+}
+
+// NextFireTime returns the earliest next_fire_time among WAITING enabled jobs.
+func (s *Store) NextFireTime(ctx context.Context) (time.Time, error) {
+	query := nextFireTimeSQL(s.dialect, s.jobsTable())
+	var t sql.NullTime
+	if err := s.db.QueryRowContext(ctx, query, scheduler.StateWaiting).Scan(&t); err != nil {
+		return time.Time{}, fmt.Errorf("jdbc store: next fire time: %w", err)
+	}
+	return t.Time, nil
 }
 
 // PurgeExecutions deletes execution records older than the given time.

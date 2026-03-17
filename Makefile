@@ -31,6 +31,14 @@ db-clean:
 run-example:
 	cd _examples/$(APP) && go run .
 
+# Run multi-instance example (3 replicas + Postgres)
+swarm-up:
+	docker compose -f _examples/multi-instance/compose.yml up --build
+
+# Stop multi-instance example
+swarm-down:
+	docker compose -f _examples/multi-instance/compose.yml down -v
+
 # Run lint and tests
 check: lint test
 

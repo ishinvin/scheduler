@@ -61,17 +61,6 @@ func (s *Store) GetJob(_ context.Context, id scheduler.JobID) (*scheduler.JobRec
 	return &cp, nil
 }
 
-func (s *Store) ListJobs(_ context.Context) ([]*scheduler.JobRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	result := make([]*scheduler.JobRecord, 0, len(s.jobs))
-	for _, job := range s.jobs {
-		cp := *job
-		result = append(result, &cp)
-	}
-	return result, nil
-}
-
 // AcquireNextJobs finds due jobs and marks them ACQUIRED in a single operation.
 func (s *Store) AcquireNextJobs(_ context.Context, now time.Time, instanceID string) ([]*scheduler.JobRecord, error) {
 	s.mu.Lock()
@@ -144,6 +133,21 @@ func (s *Store) RecoverStaleJobs(_ context.Context, threshold time.Duration) (in
 		recovered++
 	}
 	return recovered, nil
+}
+
+func (s *Store) NextFireTime(_ context.Context) (time.Time, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var earliest time.Time
+	for _, job := range s.jobs {
+		if job.State != scheduler.StateWaiting || !job.Enabled || job.NextFireTime.IsZero() {
+			continue
+		}
+		if earliest.IsZero() || job.NextFireTime.Before(earliest) {
+			earliest = job.NextFireTime
+		}
+	}
+	return earliest, nil
 }
 
 func (*Store) PurgeExecutions(_ context.Context, _ time.Time) (int, error) {

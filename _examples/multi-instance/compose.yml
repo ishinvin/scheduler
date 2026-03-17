@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: scheduler
+      POSTGRES_USER: scheduler
+      POSTGRES_PASSWORD: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scheduler"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: _examples/multi-instance/Dockerfile
+    environment:
+      DATABASE_URL: postgres://scheduler:scheduler@postgres:5432/scheduler?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      replicas: 3
