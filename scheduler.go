@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	defaultMisfireThreshold = 10 * time.Minute
-	defaultPollInterval     = 30 * time.Second
+	defaultMisfireThreshold = 1 * time.Minute
+	defaultPollInterval     = 15 * time.Second
 	defaultShutdownTimeout  = 30 * time.Second
 	defaultCleanupTimeout   = 5 * time.Second
 	purgeInterval           = 24 * time.Hour
@@ -188,9 +188,8 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 	for {
 		now := time.Now().In(s.location)
-		window := now.Add(s.pollInterval)
 
-		records, err := s.store.AcquireNextJobs(s.ctx, window, s.instanceID)
+		records, err := s.store.AcquireNextJobs(s.ctx, now, s.instanceID)
 		if err != nil {
 			s.logger.Error("failed to acquire due jobs from store", "error", err)
 		}
@@ -352,6 +351,8 @@ func (s *Scheduler) executeJob(job Job) {
 
 	if releaseErr := s.store.ReleaseJob(cleanupCtx, job.ID, nextFire); releaseErr != nil {
 		s.logger.Error("failed to release job", "job", job.ID, "error", releaseErr)
+	} else {
+		s.signal() // wake the poll loop so it picks up the next fire time promptly
 	}
 
 	// Record execution.

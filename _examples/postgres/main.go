@@ -19,7 +19,7 @@ import (
 func main() {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://localhost:5432/scheduler?sslmode=disable"
+		dsn = "postgres://scheduler:scheduler@localhost:5432/scheduler?sslmode=disable"
 	}
 
 	db, err := sql.Open("postgres", dsn)
@@ -58,7 +58,7 @@ func main() {
 	sched.Register(ctx, scheduler.Job{
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",
-		Trigger: must(scheduler.NewCronTrigger("*/5 * * * *")), // every 5 minutes
+		Trigger: must(scheduler.NewCronTrigger("*/1 * * * *")), // every 1 minute
 		Timeout: 2 * time.Minute,                               // timeout persists to DB
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "running cleanup...")

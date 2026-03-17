@@ -19,7 +19,7 @@ import (
 func main() {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "root:@tcp(localhost:3306)/scheduler?parseTime=true"
+		dsn = "root:scheduler@tcp(localhost:3306)/scheduler?parseTime=true"
 	}
 
 	db, err := sql.Open("mysql", dsn)

@@ -15,5 +15,21 @@ test:
 lint:
 	golangci-lint run ./...
 
+# Start all databases
+db-up:
+	docker compose -f _examples/compose.yml up -d
+
+# Stop all databases
+db-down:
+	docker compose -f _examples/compose.yml down
+
+# Stop all databases and remove volumes
+db-clean:
+	docker compose -f _examples/compose.yml down -v
+
+# Run example: make run-example APP=postgres
+run-example:
+	cd _examples/$(APP) && go run .
+
 # Setup development environment
 setup: tools hooks

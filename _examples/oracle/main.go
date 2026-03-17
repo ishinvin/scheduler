@@ -17,9 +17,9 @@ import (
 )
 
 func main() {
-	dsn := os.Getenv("ORACLE_DSN")
+	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "oracle://user:pass@localhost:1521/ORCLPDB1"
+		dsn = "oracle://scheduler:scheduler@localhost:1521/FREEPDB1"
 	}
 
 	db, err := sql.Open("oracle", dsn)
