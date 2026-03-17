@@ -45,7 +45,7 @@ type Store struct {
 }
 
 // table returns a fully qualified table name with prefix, using the dialect's
-// identifier casing (e.g., lowercase for Postgres/SQLite, uppercase for Oracle).
+// identifier casing (e.g., lowercase for Postgres, uppercase for Oracle).
 func (s *Store) table(name string) string {
 	return s.dialect.Col(s.tablePrefix + name)
 }
@@ -366,9 +366,7 @@ func (*Store) Close() error {
 // When InitializeSchema is set to InitSchemaAlways, it creates the schema.
 func (s *Store) Init(ctx context.Context) error {
 	if s.initializeSchema == InitSchemaAlways {
-		if err := s.CreateSchema(ctx); err != nil {
-			return err
-		}
+		return s.CreateSchema(ctx)
 	}
 	return nil
 }

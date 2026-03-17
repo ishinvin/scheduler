@@ -43,12 +43,15 @@ func main() {
 		// jdbc.WithTablePrefix("myapp_"),                // optional table prefix
 	)
 
-	sched := scheduler.New(
+	ctx := context.Background()
+
+	sched, err := scheduler.New(ctx,
 		scheduler.WithJobStore(store),
 		scheduler.WithInstanceID("worker-1"),
 	)
-
-	ctx := context.Background()
+	if err != nil {
+		log.Fatalf("init scheduler: %v", err)
+	}
 
 	// Register jobs. These are persisted to Oracle and survive restarts.
 	// The Fn is stored by job ID so rehydrated jobs can resolve it on restart.

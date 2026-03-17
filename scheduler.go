@@ -39,8 +39,10 @@ type Scheduler struct {
 
 // New creates a new Scheduler with the given options.
 // A JobStore must be provided via WithJobStore (e.g., memory.New() or jdbc.New()).
-// Default: slog logger, UTC timezone, 15s poll interval.
-func New(opts ...Option) *Scheduler {
+// If the store implements JobStoreInitializer, Init is called during construction
+// (e.g., schema creation for JDBC stores with InitSchemaAlways).
+// Default: slog logger, UTC timezone, 30s poll interval.
+func New(ctx context.Context, opts ...Option) (*Scheduler, error) {
 	s := &Scheduler{
 		logger:           &slogLogger{},
 		location:         time.UTC,
@@ -58,7 +60,14 @@ func New(opts ...Option) *Scheduler {
 		o(s)
 	}
 
-	return s
+	// Initialize the store (e.g., schema creation) if it supports it.
+	if init, ok := s.store.(JobStoreInitializer); ok {
+		if err := init.Init(ctx); err != nil {
+			return nil, fmt.Errorf("scheduler: store init: %w", err)
+		}
+	}
+
+	return s, nil
 }
 
 // Register adds a job to the scheduler and persists it to the job store.
@@ -151,13 +160,6 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}
 
 	s.ctx = ctx
-
-	// If the store implements JobStoreInitializer, call Init (e.g., schema creation).
-	if init, ok := s.store.(JobStoreInitializer); ok {
-		if err := init.Init(s.ctx); err != nil {
-			return fmt.Errorf("scheduler: store init: %w", err)
-		}
-	}
 
 	// Start stale job recovery ticker.
 	var recoveryTicker *time.Ticker

@@ -11,15 +11,20 @@ import (
 	"github.com/ishinvin/scheduler/jobstore/memory"
 )
 
-func newTestScheduler() *scheduler.Scheduler {
-	return scheduler.New(
+func newTestScheduler(t *testing.T) *scheduler.Scheduler {
+	t.Helper()
+	s, err := scheduler.New(context.Background(),
 		scheduler.WithJobStore(memory.New()),
 		scheduler.WithPollInterval(25*time.Millisecond),
 	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s
 }
 
 func TestRegisterAndExecute(t *testing.T) {
-	s := newTestScheduler()
+	s := newTestScheduler(t)
 
 	var count atomic.Int32
 
@@ -55,7 +60,7 @@ func TestRegisterAndExecute(t *testing.T) {
 }
 
 func TestReschedule(t *testing.T) {
-	s := newTestScheduler()
+	s := newTestScheduler(t)
 
 	var count atomic.Int32
 
@@ -92,7 +97,7 @@ func TestReschedule(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	s := newTestScheduler()
+	s := newTestScheduler(t)
 
 	var count atomic.Int32
 
@@ -138,7 +143,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestOnceTrigger(t *testing.T) {
-	s := newTestScheduler()
+	s := newTestScheduler(t)
 
 	var count atomic.Int32
 
@@ -168,7 +173,7 @@ func TestOnceTrigger(t *testing.T) {
 }
 
 func TestHandlerRegistry(t *testing.T) {
-	s := newTestScheduler()
+	s := newTestScheduler(t)
 
 	var count atomic.Int32
 
@@ -215,11 +220,14 @@ func TestIntervalTrigger(t *testing.T) {
 
 func TestRecoverStaleJobs(t *testing.T) {
 	store := memory.New()
-	s := scheduler.New(
+	s, err := scheduler.New(context.Background(),
 		scheduler.WithJobStore(store),
 		scheduler.WithMisfireThreshold(100*time.Millisecond),
 		scheduler.WithPollInterval(25*time.Millisecond),
 	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	var count atomic.Int32
 
@@ -271,7 +279,7 @@ func TestRecoverStaleJobs(t *testing.T) {
 }
 
 func TestRescheduleNotFound(t *testing.T) {
-	s := newTestScheduler()
+	s := newTestScheduler(t)
 	err := s.Reschedule(context.Background(), "nope", scheduler.NewIntervalTrigger(time.Second))
 	if !errors.Is(err, scheduler.ErrJobNotFound) {
 		t.Fatalf("expected ErrJobNotFound, got %v", err)

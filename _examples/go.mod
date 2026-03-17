@@ -8,7 +8,6 @@ require (
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/ishinvin/scheduler v0.0.0
 	github.com/lib/pq v1.10.9
-	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/sijms/go-ora/v2 v2.8.24
 )
 

@@ -37,11 +37,14 @@ import (
 )
 
 func main() {
-    sched := scheduler.New(
+    ctx := context.Background()
+
+    sched, err := scheduler.New(ctx,
         scheduler.WithJobStore(memory.New()),
     )
-
-    ctx := context.Background()
+    if err != nil {
+        log.Fatal(err)
+    }
 
     // Register a cron job with a 30s execution timeout
     sched.Register(ctx, scheduler.Job{
@@ -105,12 +108,15 @@ func main() {
         jdbc.WithClustered(), // enables TRIGGER_ACCESS row locking
     )
 
-    sched := scheduler.New(
+    ctx := context.Background()
+
+    sched, err := scheduler.New(ctx,
         scheduler.WithJobStore(store),
         scheduler.WithInstanceID("worker-1"),
     )
-
-    ctx := context.Background()
+    if err != nil {
+        log.Fatal(err)
+    }
 
     // Register a job. Fn is stored by job ID so rehydrated jobs
     // can resolve it on restart.
@@ -213,9 +219,6 @@ Without `WithClustered()`, the lock table is skipped — fewer round trips, but 
 | ---------- | ----------------- | ------------- | ---------- |
 | PostgreSQL | `jdbc.Postgres{}` | `55P03`       | Yes        |
 | Oracle     | `jdbc.Oracle{}`   | `ORA-00054`   | Yes        |
-| SQLite     | `jdbc.SQLite{}`   | `SQLITE_BUSY` | No         |
-
-> SQLite uses file-level locking and does not support `FOR UPDATE NOWAIT`. Use it for single-instance persistence only.
 
 ### Database Schema
 
@@ -238,7 +241,6 @@ To get the DDL for your migration tool:
 ```go
 fmt.Println(jdbc.Postgres{}.SchemaSQL(""))        // PostgreSQL DDL
 fmt.Println(jdbc.Oracle{}.SchemaSQL(""))          // Oracle DDL
-fmt.Println(jdbc.SQLite{}.SchemaSQL(""))          // SQLite DDL
 fmt.Println(jdbc.Postgres{}.SchemaSQL("myapp_"))  // with table prefix
 ```
 
@@ -250,7 +252,7 @@ You can also call `store.CreateSchema(ctx)` or `store.SchemaSQL()` directly.
 
 ```go
 // Create a new scheduler
-sched := scheduler.New(opts ...Option)
+sched, err := scheduler.New(ctx, opts ...Option)
 
 // Register a new job (Fn is stored by job ID for rehydration)
 sched.Register(ctx, job Job) error
@@ -298,7 +300,6 @@ See the [\_examples/](_examples/) directory:
 - [\_examples/memory/](_examples/memory/) — single-instance with cron, interval, and once triggers
 - [\_examples/postgres/](_examples/postgres/) — clustered with PostgreSQL JDBC store
 - [\_examples/oracle/](_examples/oracle/) — clustered with Oracle JDBC store
-- [\_examples/sqlite/](_examples/sqlite/) — single-instance with SQLite persistence
 - [\_examples/mysql/](_examples/mysql/) — custom MySQL dialect example
 
 ## Project Structure
@@ -320,13 +321,11 @@ scheduler/
 │       ├── store.go    # SQL store with optional table locks
 │       ├── dialect.go  # Dialect interface + query generators
 │       ├── postgres.go # PostgreSQL dialect
-│       ├── oracle.go   # Oracle dialect
-│       └── sqlite.go   # SQLite dialect
+│       └── oracle.go   # Oracle dialect
 └── _examples/
     ├── memory/         # In-memory example
     ├── postgres/       # PostgreSQL clustered example
     ├── oracle/         # Oracle clustered example
-    ├── sqlite/         # SQLite example
     └── mysql/          # MySQL custom dialect example
 ```
 

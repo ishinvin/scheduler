@@ -12,18 +12,18 @@ import (
 // Users can implement this interface to support additional databases (e.g., MySQL).
 type Dialect interface {
 	// Placeholder returns the SQL placeholder for the given 1-based parameter index.
-	// e.g., "?" for MySQL/SQLite, "$1" for Postgres, ":1" for Oracle.
+	// e.g., "?" for MySQL, "$1" for Postgres, ":1" for Oracle.
 	Placeholder(index int) string
 
 	// Columns returns the comma-separated column list for SELECT queries.
 	// Must match the scan order in store.scanJob.
 	Columns() string
 
-	// BooleanTrue returns the SQL literal for true ("TRUE" for Postgres, "1" for SQLite/Oracle/MySQL).
+	// BooleanTrue returns the SQL literal for true ("TRUE" for Postgres, "1" for Oracle/MySQL).
 	BooleanTrue() string
 
 	// Col returns the column name in the dialect's preferred casing.
-	// e.g., "job_id" for Postgres/SQLite/MySQL, "JOB_ID" for Oracle.
+	// e.g., "job_id" for Postgres/MySQL, "JOB_ID" for Oracle.
 	Col(name string) string
 
 	// SchemaSQL returns the full DDL string for the given table prefix.

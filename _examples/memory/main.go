@@ -13,11 +13,14 @@ import (
 )
 
 func main() {
-	sched := scheduler.New(
+	ctx := context.Background()
+
+	sched, err := scheduler.New(ctx,
 		scheduler.WithJobStore(memory.New()),
 	)
-
-	ctx := context.Background()
+	if err != nil {
+		log.Fatalf("init scheduler: %v", err)
+	}
 
 	// Cron trigger: every minute, with a 10s execution timeout.
 	sched.Register(ctx, scheduler.Job{
