@@ -11,9 +11,8 @@ import (
 // Store is an in-memory JobStore implementation.
 // Suitable for single-instance deployments — no distributed locking.
 type Store struct {
-	mu         sync.RWMutex
-	jobs       map[scheduler.JobID]*scheduler.JobRecord
-	executions []*scheduler.ExecutionRecord
+	mu   sync.RWMutex
+	jobs map[scheduler.JobID]*scheduler.JobRecord
 }
 
 // New creates a new in-memory job store.
@@ -113,11 +112,7 @@ func (s *Store) ReleaseJob(_ context.Context, id scheduler.JobID, nextFireTime t
 	return nil
 }
 
-func (s *Store) RecordExecution(_ context.Context, exec *scheduler.ExecutionRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cp := *exec
-	s.executions = append(s.executions, &cp)
+func (*Store) RecordExecution(_ context.Context, _ *scheduler.ExecutionRecord) error {
 	return nil
 }
 
@@ -139,6 +134,10 @@ func (s *Store) RecoverStaleJobs(_ context.Context, threshold time.Duration) (in
 		recovered++
 	}
 	return recovered, nil
+}
+
+func (*Store) PurgeExecutions(_ context.Context, _ time.Time) (int, error) {
+	return 0, nil
 }
 
 func (*Store) Close() error {

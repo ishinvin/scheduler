@@ -109,6 +109,11 @@ func recoverStaleJobsSQL(d Dialect, table string) string {
 		d.Col("acquired_at"), d.Placeholder(4)) //nolint:mnd // placeholder index
 }
 
+func purgeExecutionsSQL(d Dialect, table string) string {
+	return fmt.Sprintf("DELETE FROM %s WHERE %s < %s",
+		table, d.Col("finished_at"), d.Placeholder(1))
+}
+
 // containsString checks if an error message contains a substring.
 func containsString(err error, substr string) bool {
 	if err == nil {

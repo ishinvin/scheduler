@@ -5,16 +5,6 @@ import (
 	"time"
 )
 
-// JobState represents the lifecycle state of a job.
-type JobState string
-
-// Job states.
-const (
-	StateWaiting  JobState = "WAITING"
-	StateAcquired JobState = "ACQUIRED"
-	StateComplete JobState = "COMPLETE"
-)
-
 // JobStore is the single persistence and coordination interface.
 // Implementations handle storage, state transitions, and distributed locking internally.
 //
@@ -47,39 +37,12 @@ type JobStore interface {
 	// given threshold back to WAITING. Returns the number of recovered jobs.
 	RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error)
 
+	// PurgeExecutions deletes execution records older than the given time.
+	// Returns the number of deleted records.
+	PurgeExecutions(ctx context.Context, before time.Time) (int, error)
+
 	// Close releases any resources held by the store.
 	Close() error
-}
-
-// Logger is a minimal structured logger.
-type Logger interface {
-	Info(msg string, keysAndValues ...any)
-	Error(msg string, keysAndValues ...any)
-}
-
-// JobRecord is the serializable representation of a job in the store.
-type JobRecord struct {
-	ID           JobID
-	Name         string
-	TriggerType  string        // "cron", "once", "interval"
-	TriggerValue string        // cron expr, RFC3339 time, or duration string
-	Timeout      time.Duration // per-execution timeout; 0 = no timeout
-	NextFireTime time.Time
-	State        JobState
-	InstanceID   string // which instance owns it (when ACQUIRED)
-	AcquiredAt   time.Time
-	Enabled      bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-}
-
-// ExecutionRecord captures a single run of a job.
-type ExecutionRecord struct {
-	JobID      JobID
-	Instance   string
-	StartedAt  time.Time
-	FinishedAt time.Time
-	Err        string
 }
 
 // JobStoreInitializer is an optional interface that a JobStore may implement

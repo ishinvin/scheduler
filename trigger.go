@@ -8,6 +8,12 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+// Trigger determines when a Job should fire next.
+type Trigger interface {
+	NextFireTime(after time.Time) time.Time
+	fmt.Stringer
+}
+
 // ---------------------------------------------------------------------------
 // CronTrigger
 // ---------------------------------------------------------------------------

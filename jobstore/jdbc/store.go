@@ -346,6 +346,17 @@ func (s *Store) RecoverStaleJobs(ctx context.Context, threshold time.Duration) (
 	return int(n), nil
 }
 
+// PurgeExecutions deletes execution records older than the given time.
+func (s *Store) PurgeExecutions(ctx context.Context, before time.Time) (int, error) {
+	query := purgeExecutionsSQL(s.dialect, s.execsTable())
+	result, err := s.db.ExecContext(ctx, query, before)
+	if err != nil {
+		return 0, fmt.Errorf("jdbc store: purge executions: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	return int(n), nil
+}
+
 // Close releases any resources held by the store.
 func (*Store) Close() error {
 	return nil

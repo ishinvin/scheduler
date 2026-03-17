@@ -64,3 +64,14 @@ func WithPollInterval(d time.Duration) Option {
 		}
 	}
 }
+
+// WithExecutionRetention sets how long execution records are kept before
+// automatic purging. Default is 0 (no purge — records are kept forever).
+// When set, the scheduler periodically deletes records older than the retention period.
+func WithExecutionRetention(d time.Duration) Option {
+	return func(sc *Scheduler) {
+		if d > 0 {
+			sc.executionRetention = d
+		}
+	}
+}
