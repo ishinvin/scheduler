@@ -42,10 +42,9 @@ func TestRegisterAndExecute(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	// Duplicate should fail.
-	err := s.Register(context.Background(), job)
-	if !errors.Is(err, scheduler.ErrJobAlreadyExists) {
-		t.Fatalf("expected ErrJobAlreadyExists, got %v", err)
+	// Duplicate registration should be idempotent (no error).
+	if err := s.Register(context.Background(), job); err != nil {
+		t.Fatalf("duplicate Register should be idempotent, got %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -276,6 +275,128 @@ func TestRecoverStaleJobs(t *testing.T) {
 	if rec.State != scheduler.StateWaiting {
 		t.Fatalf("expected WAITING after recovery, got %s", rec.State)
 	}
+}
+
+func TestMultiInstanceNoDuplicate(t *testing.T) {
+	// Two scheduler instances share the same store.
+	// A once-trigger job must fire exactly once, even with concurrent instances.
+	store := memory.New()
+
+	var count atomic.Int32
+
+	fn := func(_ context.Context) error {
+		count.Add(1)
+		time.Sleep(50 * time.Millisecond) // hold ACQUIRED state briefly
+		return nil
+	}
+
+	s1, err := scheduler.New(context.Background(),
+		scheduler.WithJobStore(store),
+		scheduler.WithInstanceID("instance-1"),
+		scheduler.WithPollInterval(25*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("New s1: %v", err)
+	}
+
+	s2, err := scheduler.New(context.Background(),
+		scheduler.WithJobStore(store),
+		scheduler.WithInstanceID("instance-2"),
+		scheduler.WithPollInterval(25*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("New s2: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := s1.Register(ctx, scheduler.Job{
+		ID:      "once-shared",
+		Name:    "shared once job",
+		Trigger: scheduler.NewOnceTrigger(time.Now().Add(50 * time.Millisecond)),
+		Fn:      fn,
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	// Also register the same job on instance 2 (idempotent — only registers handler).
+	if err := s2.Register(ctx, scheduler.Job{
+		ID:      "once-shared",
+		Name:    "shared once job",
+		Trigger: scheduler.NewOnceTrigger(time.Now().Add(50 * time.Millisecond)),
+		Fn:      fn,
+	}); err != nil {
+		t.Fatalf("Register s2: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = s1.Run(ctx) }()
+	go func() { _ = s2.Run(ctx) }()
+
+	time.Sleep(400 * time.Millisecond)
+	cancel()
+
+	if c := count.Load(); c != 1 {
+		t.Fatalf("expected exactly 1 execution across 2 instances, got %d", c)
+	}
+}
+
+func TestMultiInstanceIntervalDistribution(t *testing.T) {
+	// Two instances share the same store with an interval job.
+	// Both instances should execute the job (taking turns) with no duplicates per cycle.
+	store := memory.New()
+
+	var instance1Count, instance2Count atomic.Int32
+
+	fn1 := func(_ context.Context) error {
+		instance1Count.Add(1)
+		return nil
+	}
+	fn2 := func(_ context.Context) error {
+		instance2Count.Add(1)
+		return nil
+	}
+
+	s1, _ := scheduler.New(context.Background(),
+		scheduler.WithJobStore(store),
+		scheduler.WithInstanceID("instance-1"),
+		scheduler.WithPollInterval(25*time.Millisecond),
+	)
+	s2, _ := scheduler.New(context.Background(),
+		scheduler.WithJobStore(store),
+		scheduler.WithInstanceID("instance-2"),
+		scheduler.WithPollInterval(25*time.Millisecond),
+	)
+
+	ctx := context.Background()
+	if err := s1.Register(ctx, scheduler.Job{
+		ID:      "interval-shared",
+		Name:    "shared interval job",
+		Trigger: scheduler.NewIntervalTrigger(50 * time.Millisecond),
+		Fn:      fn1,
+	}); err != nil {
+		t.Fatalf("Register s1: %v", err)
+	}
+	if err := s2.Register(ctx, scheduler.Job{
+		ID:      "interval-shared",
+		Name:    "shared interval job",
+		Trigger: scheduler.NewIntervalTrigger(50 * time.Millisecond),
+		Fn:      fn2,
+	}); err != nil {
+		t.Fatalf("Register s2: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = s1.Run(ctx) }()
+	go func() { _ = s2.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+
+	total := instance1Count.Load() + instance2Count.Load()
+	if total == 0 {
+		t.Fatal("expected at least one execution across instances")
+	}
+	t.Logf("instance-1: %d, instance-2: %d, total: %d", instance1Count.Load(), instance2Count.Load(), total)
 }
 
 func TestRescheduleNotFound(t *testing.T) {

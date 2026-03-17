@@ -92,9 +92,9 @@ func (s *Scheduler) Register(ctx context.Context, job Job) error {
 		return fmt.Errorf("scheduler: no job store configured (use WithJobStore)")
 	}
 
-	// Check for duplicates in the store.
-	if _, err := s.store.GetJob(ctx, job.ID); err == nil {
-		return ErrJobAlreadyExists
+	// Idempotent: if the job already exists, just keep the handler registered above.
+	if _, err := s.store.GetJob(ctx, job.ID); !errors.Is(err, ErrJobNotFound) {
+		return err
 	}
 
 	now := time.Now().In(s.location)

@@ -31,5 +31,8 @@ db-clean:
 run-example:
 	cd _examples/$(APP) && go run .
 
+# Run lint and tests
+check: lint test
+
 # Setup development environment
 setup: tools hooks
