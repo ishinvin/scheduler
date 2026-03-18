@@ -8,7 +8,10 @@ A job scheduling library for Go with pluggable job stores and multi-instance sup
 - **Register / Reschedule / Delete** jobs at runtime
 - **Pluggable JobStore** — choose between memory (single-instance) or JDBC (SQL-backed, multi-instance safe)
 - **Store-driven dispatch** — the scheduler polls the store for due jobs each cycle, so schedule changes are immediately visible
+- **Adaptive polling** — uses `NextFireTime` to sleep exactly until the next job is due, with `pollInterval` as a safety fallback
+- **Fair job distribution** — `FOR UPDATE SKIP LOCKED` ensures concurrent instances each get disjoint subsets of due jobs
 - **Per-job optimistic locking** — `WHERE state = 'WAITING'` ensures only one instance acquires each job, no separate lock table needed
+- **Crash recovery** — stale jobs stuck in ACQUIRED state are automatically recovered back to WAITING, respecting per-job timeouts
 - **Context-based lifecycle** — `Run(ctx)` blocks until the context is canceled, with graceful shutdown
 
 ## Installation
@@ -105,6 +108,7 @@ func main() {
 
     store := jdbc.New(db, jdbc.Postgres{},
         jdbc.WithInstanceID("worker-1"),
+        jdbc.WithInitializeSchema(jdbc.InitSchemaAlways),
     )
 
     ctx := context.Background()
@@ -117,8 +121,8 @@ func main() {
         log.Fatal(err)
     }
 
-    // Register a job. Fn is stored by job ID so rehydrated jobs
-    // can resolve it on restart.
+    // Register a job. Idempotent — if the job already exists in the store,
+    // only the Fn handler is registered (safe for multi-instance restarts).
     sched.Register(ctx, scheduler.Job{
         ID:      "welcome-email",
         Name:    "Send welcome emails",
@@ -142,11 +146,12 @@ func main() {
 
 The scheduler uses a **store-driven dispatch** model:
 
-1. The run loop polls the store every `pollInterval` (default 15s) via `AcquireNextJobs(now, instanceID)`
-2. The store atomically selects due jobs and claims them (WAITING → ACQUIRED) in a single transaction
-3. Each job's UPDATE uses `WHERE state = 'WAITING'` as an optimistic lock — only one instance wins
-4. For each acquired job, the scheduler resolves the `Fn` handler from an in-memory registry
-5. Executes the function, then calls `ReleaseJob` to update the next fire time
+1. The run loop queries `NextFireTime` to sleep precisely until the next job is due (capped by `pollInterval` as a safety fallback)
+2. `AcquireNextJobs(now, instanceID)` atomically selects due jobs and claims them (WAITING → ACQUIRED) in a single transaction
+3. `FOR UPDATE SKIP LOCKED` distributes jobs fairly across concurrent instances — each sees only unlocked rows
+4. Each job's UPDATE uses `WHERE state = 'WAITING'` as a safety net against edge cases
+5. For each acquired job, the scheduler resolves the `Fn` handler from an in-memory registry
+6. Executes the function, then calls `ReleaseJob` to update the next fire time
 
 The store is always the source of truth — there is no in-memory scheduling state.
 
@@ -162,7 +167,7 @@ type JobStore interface {
     AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*JobRecord, error)
     ReleaseJob(ctx context.Context, id JobID, nextFireTime time.Time) error
     RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error)
-    Close() error
+    NextFireTime(ctx context.Context) (time.Time, error)
 }
 ```
 
@@ -177,12 +182,15 @@ type JobStore interface {
 
 ```
 BEGIN tx
-  SELECT ... FROM scheduler_jobs WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
-  UPDATE scheduler_jobs SET state = 'ACQUIRED' ... WHERE job_id = ? AND state = 'WAITING'  (per job)
+  SELECT ... FROM scheduler_jobs
+    WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
+    FOR UPDATE SKIP LOCKED
+  UPDATE scheduler_jobs SET state = 'ACQUIRED' ...
+    WHERE job_id = ? AND state = 'WAITING'  (per job)
 COMMIT
 ```
 
-The `AND state = 'WAITING'` condition on each UPDATE acts as an optimistic lock. If two instances try to acquire the same job concurrently, only one gets `RowsAffected = 1` — the other sees 0 and skips it.
+`FOR UPDATE SKIP LOCKED` ensures concurrent instances each get disjoint subsets of due jobs. The `AND state = 'WAITING'` condition on each UPDATE acts as a safety net — if two instances somehow see the same job, only one gets `RowsAffected = 1`.
 
 ### JDBC Store Tables
 
@@ -233,7 +241,7 @@ You can also call `store.CreateSchema(ctx)` or `store.SchemaSQL()` directly.
 // Create a new scheduler
 sched, err := scheduler.New(ctx, opts ...Option)
 
-// Register a new job (Fn is stored by job ID for rehydration)
+// Register a new job (idempotent — safe for multi-instance restarts)
 sched.Register(ctx, job Job) error
 
 // Change a job's trigger
@@ -250,7 +258,7 @@ sched.Run(ctx context.Context) error
 
 ```go
 scheduler.WithJobStore(store)            // Set job store (required)
-scheduler.WithLogger(logger)             // Set structured logger
+scheduler.WithVerbose()                  // Enable logging via slog (default: silent)
 scheduler.WithLocation(loc)              // Set timezone (default: UTC)
 scheduler.WithInstanceID(id)             // Set instance ID (default: hostname)
 scheduler.WithPollInterval(d)            // Safety fallback poll interval (default: 15s)
@@ -280,6 +288,7 @@ See the [\_examples/](_examples/) directory:
 - [\_examples/postgres/](_examples/postgres/) — multi-instance with PostgreSQL JDBC store
 - [\_examples/oracle/](_examples/oracle/) — multi-instance with Oracle JDBC store
 - [\_examples/mysql/](_examples/mysql/) — custom MySQL dialect example
+- [\_examples/multi-instance/](_examples/multi-instance/) — Docker Compose with 3 replicas sharing PostgreSQL
 
 ## Project Structure
 
@@ -290,7 +299,7 @@ scheduler/
 ├── trigger.go          # CronTrigger, OnceTrigger, IntervalTrigger
 ├── interfaces.go       # JobStore interface, JobRecord
 ├── options.go          # Functional options
-├── logger.go           # Default slog logger
+├── logger.go           # Verbose logging via slog
 ├── errors.go           # Sentinel errors
 ├── scheduler_test.go   # Tests
 ├── jobstore/
@@ -305,7 +314,8 @@ scheduler/
     ├── memory/         # In-memory example
     ├── postgres/       # PostgreSQL multi-instance example
     ├── oracle/         # Oracle multi-instance example
-    └── mysql/          # MySQL custom dialect example
+    ├── mysql/          # MySQL custom dialect example
+    └── multi-instance/ # Docker Compose multi-replica example
 ```
 
 ## License

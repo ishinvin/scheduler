@@ -11,9 +11,9 @@ func WithJobStore(s JobStore) Option {
 	return func(sc *Scheduler) { sc.store = s }
 }
 
-// WithLogger sets the logger.
-func WithLogger(l Logger) Option {
-	return func(sc *Scheduler) { sc.logger = l }
+// WithVerbose enables logging via slog. Default is silent.
+func WithVerbose() Option {
+	return func(sc *Scheduler) { sc.verbose = true }
 }
 
 // WithLocation sets the time zone for cron evaluation.

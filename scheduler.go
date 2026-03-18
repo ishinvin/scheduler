@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"sync"
@@ -22,7 +23,7 @@ const (
 type Scheduler struct {
 	handlers         sync.Map // JobID → func(ctx context.Context) error
 	store            JobStore
-	logger           Logger
+	verbose          bool
 	location         *time.Location
 	instanceID       string
 	misfireThreshold time.Duration
@@ -42,7 +43,7 @@ type Scheduler struct {
 // Default: slog logger, UTC timezone, 30s poll interval.
 func New(ctx context.Context, opts ...Option) (*Scheduler, error) {
 	s := &Scheduler{
-		logger:           &slogLogger{},
+		verbose:          false,
 		location:         time.UTC,
 		misfireThreshold: defaultMisfireThreshold,
 		pollInterval:     defaultPollInterval,
@@ -103,6 +104,7 @@ func (s *Scheduler) Register(ctx context.Context, job Job) error {
 		return fmt.Errorf("scheduler: register job: %w", err)
 	}
 
+	s.logInfo("job registered", "job", job.ID, "trigger", record.TriggerType, "next", next)
 	s.signal()
 	return nil
 }
@@ -136,6 +138,7 @@ func (s *Scheduler) Reschedule(ctx context.Context, id JobID, trigger Trigger) e
 		return fmt.Errorf("scheduler: reschedule job: %w", err)
 	}
 
+	s.logInfo("job rescheduled", "job", id, "trigger", updated.TriggerType, "next", nextRun)
 	s.signal()
 	return nil
 }
@@ -146,6 +149,7 @@ func (s *Scheduler) Delete(ctx context.Context, id JobID) error {
 		return fmt.Errorf("scheduler: delete job: %w", err)
 	}
 	s.handlers.Delete(id)
+	s.logInfo("job deleted", "job", id)
 	s.signal()
 	return nil
 }
@@ -158,6 +162,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}
 
 	s.ctx = ctx
+	s.logInfo("scheduler starting", "instance", s.instanceID, "poll_interval", s.pollInterval, "misfire_threshold", s.misfireThreshold)
 
 	// Start stale job recovery ticker.
 	var recoveryTicker *time.Ticker
@@ -179,10 +184,11 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 		records, err := s.store.AcquireNextJobs(s.ctx, now, s.instanceID)
 		if err != nil {
-			s.logger.Error("failed to acquire due jobs from store", "error", err)
+			s.logError("failed to acquire due jobs from store", "error", err)
 		}
 
 		if len(records) > 0 {
+			s.logInfo("acquired jobs", "count", len(records))
 			// Sort by fire time for precise scheduling.
 			sort.Slice(records, func(i, j int) bool {
 				return records[i].NextFireTime.Before(records[j].NextFireTime)
@@ -274,7 +280,7 @@ func (s *Scheduler) dispatchJob(rec *JobRecord) {
 
 	trigger, err := triggerFromRecord(rec)
 	if err != nil {
-		s.logger.Error("failed to parse trigger from store", "job", rec.ID, "error", err)
+		s.logError("failed to parse trigger from store", "job", rec.ID, "error", err)
 		_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
 		return
 	}
@@ -287,6 +293,7 @@ func (s *Scheduler) dispatchJob(rec *JobRecord) {
 		Timeout: rec.Timeout,
 	}
 
+	s.logInfo("dispatching job", "job", rec.ID, "name", rec.Name)
 	s.wg.Add(1)
 	go s.executeJob(job)
 }
@@ -297,7 +304,7 @@ func (s *Scheduler) releaseRemaining(records []*JobRecord) {
 	defer cancel()
 	for _, rec := range records {
 		if err := s.store.ReleaseJob(cleanupCtx, rec.ID, rec.NextFireTime); err != nil && !errors.Is(err, ErrJobNotFound) {
-			s.logger.Error("failed to release unfired job", "job", rec.ID, "error", err)
+			s.logError("failed to release unfired job", "job", rec.ID, "error", err)
 		}
 	}
 }
@@ -335,14 +342,15 @@ func (s *Scheduler) executeJob(job Job) {
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), s.cleanupTimeout)
 	defer cleanupCancel()
 
+	s.logInfo("job completed", "job", job.ID, "next", nextFire)
 	if releaseErr := s.store.ReleaseJob(cleanupCtx, job.ID, nextFire); releaseErr != nil {
-		s.logger.Error("failed to release job", "job", job.ID, "error", releaseErr)
+		s.logError("failed to release job", "job", job.ID, "error", releaseErr)
 	} else {
 		s.signal() // wake the poll loop so it picks up the next fire time promptly
 	}
 
 	if err != nil {
-		s.logger.Error("job execution failed", "job", job.ID, "error", err)
+		s.logError("job execution failed", "job", job.ID, "error", err)
 	}
 }
 
@@ -350,11 +358,11 @@ func (s *Scheduler) executeJob(job Job) {
 func (s *Scheduler) recoverStaleJobs() {
 	n, err := s.store.RecoverStaleJobs(s.ctx, s.misfireThreshold)
 	if err != nil {
-		s.logger.Error("failed to recover stale jobs", "error", err)
+		s.logError("failed to recover stale jobs", "error", err)
 		return
 	}
 	if n > 0 {
-		s.logger.Info("recovered stale jobs", "count", n)
+		s.logInfo("recovered stale jobs", "count", n)
 	}
 }
 
@@ -365,10 +373,12 @@ func (s *Scheduler) waitForInFlight() {
 		s.wg.Wait()
 		close(done)
 	}()
+	s.logInfo("shutting down, waiting for in-flight jobs")
 	select {
 	case <-done:
+		s.logInfo("all jobs finished")
 	case <-time.After(s.shutdownTimeout):
-		s.logger.Error("shutdown timeout exceeded, some jobs may still be running", "timeout", s.shutdownTimeout)
+		s.logError("shutdown timeout exceeded, some jobs may still be running", "timeout", s.shutdownTimeout)
 	}
 }
 
@@ -441,5 +451,17 @@ func triggerFromRecord(rec *JobRecord) (Trigger, error) {
 		return NewIntervalTrigger(d), nil
 	default:
 		return nil, fmt.Errorf("unknown trigger type: %s", rec.TriggerType)
+	}
+}
+
+func (s *Scheduler) logInfo(msg string, keysAndValues ...any) {
+	if s.verbose {
+		slog.Info(msg, keysAndValues...)
+	}
+}
+
+func (s *Scheduler) logError(msg string, keysAndValues ...any) {
+	if s.verbose {
+		slog.Error(msg, keysAndValues...)
 	}
 }
