@@ -6,7 +6,6 @@ import "time"
 type Option func(*Scheduler)
 
 // WithJobStore sets the job store implementation.
-// Use memory.New() for single-instance or jdbc.New() for multi-instance deployments.
 func WithJobStore(s JobStore) Option {
 	return func(sc *Scheduler) { sc.store = s }
 }
@@ -26,17 +25,13 @@ func WithInstanceID(id string) Option {
 	return func(sc *Scheduler) { sc.instanceID = id }
 }
 
-// WithMisfireThreshold sets how long a job can stay in ACQUIRED state before
-// being considered stale and recovered back to WAITING. Default is 1 minute.
-// Jobs with a timeout longer than this threshold use their timeout instead.
-// Set to 0 to disable stale job recovery.
+// WithMisfireThreshold sets how long a job can stay ACQUIRED before recovery. Default 1m.
+// Set to 0 to disable.
 func WithMisfireThreshold(d time.Duration) Option {
 	return func(sc *Scheduler) { sc.misfireThreshold = d }
 }
 
-// WithShutdownTimeout sets the maximum time Run() waits for in-flight jobs
-// to finish after the context is canceled. Default is 30s.
-// If the timeout is exceeded, Run() returns and logs a warning.
+// WithShutdownTimeout sets how long Run() waits for in-flight jobs on shutdown. Default 30s.
 func WithShutdownTimeout(d time.Duration) Option {
 	return func(sc *Scheduler) {
 		if d > 0 {
@@ -45,9 +40,7 @@ func WithShutdownTimeout(d time.Duration) Option {
 	}
 }
 
-// WithCleanupTimeout sets the maximum time for post-execution cleanup
-// (ReleaseJob) after a job finishes. Default is 5s.
-// Uses a detached context so cleanup completes even during shutdown.
+// WithCleanupTimeout sets the timeout for ReleaseJob after execution. Default 5s.
 func WithCleanupTimeout(d time.Duration) Option {
 	return func(sc *Scheduler) {
 		if d > 0 {
@@ -56,9 +49,7 @@ func WithCleanupTimeout(d time.Duration) Option {
 	}
 }
 
-// WithPollInterval sets the maximum time between store polls. Default is 15s.
-// Signals handle prompt wake-up for job completion, register, reschedule, and delete.
-// This interval acts as a safety fallback for missed signals or cross-instance pickup.
+// WithPollInterval sets the maximum time between store polls. Default 15s.
 func WithPollInterval(d time.Duration) Option {
 	return func(sc *Scheduler) {
 		if d > 0 {

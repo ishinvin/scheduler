@@ -231,7 +231,7 @@ fmt.Println(jdbc.Oracle{}.SchemaSQL(""))          // Oracle DDL
 fmt.Println(jdbc.Postgres{}.SchemaSQL("myapp_"))  // with table prefix
 ```
 
-You can also call `store.CreateSchema(ctx)` or `store.SchemaSQL()` directly.
+You can also call `store.CreateSchema(ctx)` to apply the DDL automatically.
 
 ## API Reference
 

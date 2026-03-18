@@ -11,25 +11,15 @@ import (
 	"github.com/ishinvin/scheduler"
 )
 
-// InitializeSchema controls whether the JDBC store creates tables on startup.
+// InitializeSchema controls whether the store creates tables on startup.
 type InitializeSchema string
 
 const (
-	// InitSchemaNever means the library never creates tables.
-	// The user (or a migration tool like Liquibase/Flyway) manages the schema.
-	InitSchemaNever InitializeSchema = "never"
-
-	// InitSchemaAlways means the library creates tables on first use via CreateSchema().
-	// Safe to call repeatedly — uses IF NOT EXISTS / MERGE idioms.
+	InitSchemaNever  InitializeSchema = "never"
 	InitSchemaAlways InitializeSchema = "always"
 )
 
 // Store implements scheduler.JobStore backed by a SQL database.
-// Per-job optimistic locking (WHERE state = 'WAITING') ensures safe concurrent
-// access across multiple scheduler instances without a separate lock table.
-//
-// Table required:
-//   - {prefix}scheduler_jobs — job definitions with state and next_fire_time
 type Store struct {
 	db               *sql.DB
 	dialect          Dialect
@@ -38,39 +28,26 @@ type Store struct {
 	initializeSchema InitializeSchema
 }
 
-// table returns a fully qualified table name with prefix in the dialect's preferred casing.
 func (s *Store) table(name string) string {
 	return col(s.dialect, s.tablePrefix+name)
 }
 
 func (s *Store) jobsTable() string { return s.table("scheduler_jobs") }
 
-// Option configures a JDBC Store.
 type Option func(*Store)
 
-// WithTablePrefix sets a prefix for all table names.
-// e.g., WithTablePrefix("myapp_") → myapp_scheduler_jobs.
 func WithTablePrefix(prefix string) Option {
 	return func(s *Store) { s.tablePrefix = prefix }
 }
 
-// WithInstanceID sets the instance identifier for distributed tracking.
 func WithInstanceID(id string) Option {
 	return func(s *Store) { s.instanceID = id }
 }
 
-// WithInitializeSchema controls whether the store creates tables on startup.
-//
-//   - InitSchemaNever (default) — the user manages the schema externally
-//     (e.g., Liquibase, Flyway, or manual DDL). Use SchemaSQL() or
-//     Postgres{}.SchemaSQL() / Oracle{}.SchemaSQL() to get the DDL.
-//   - InitSchemaAlways — the store calls CreateSchema() automatically when
-//     the scheduler starts. Safe to call repeatedly (uses IF NOT EXISTS).
 func WithInitializeSchema(mode InitializeSchema) Option {
 	return func(s *Store) { s.initializeSchema = mode }
 }
 
-// New creates a new JDBC-backed job store.
 func New(db *sql.DB, dialect Dialect, opts ...Option) *Store {
 	s := &Store{
 		db:               db,
@@ -84,10 +61,8 @@ func New(db *sql.DB, dialect Dialect, opts ...Option) *Store {
 	return s
 }
 
-// CreateSchema executes the DDL statements to create all scheduler tables.
-// Safe to call repeatedly — uses IF NOT EXISTS / MERGE.
 func (s *Store) CreateSchema(ctx context.Context) error {
-	ddl := s.SchemaSQL()
+	ddl := s.dialect.SchemaSQL(s.tablePrefix)
 	for _, stmt := range splitStatements(ddl) {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
@@ -100,19 +75,10 @@ func (s *Store) CreateSchema(ctx context.Context) error {
 	return nil
 }
 
-// SchemaSQL returns the full DDL string for this store's dialect and table prefix.
-func (s *Store) SchemaSQL() string {
-	return s.dialect.SchemaSQL(s.tablePrefix)
-}
-
-// splitStatements splits a multi-statement DDL string by semicolons.
 func splitStatements(ddl string) []string {
 	return strings.Split(ddl, ";")
 }
 
-// --- scheduler.JobStore implementation ---
-
-// SaveJob persists or updates a job definition.
 func (s *Store) SaveJob(ctx context.Context, job *scheduler.JobRecord) error {
 	query := s.dialect.UpsertJobSQL(s.jobsTable())
 	now := time.Now()
@@ -137,7 +103,6 @@ func (s *Store) SaveJob(ctx context.Context, job *scheduler.JobRecord) error {
 	return nil
 }
 
-// DeleteJob removes a job by ID.
 func (s *Store) DeleteJob(ctx context.Context, id scheduler.JobID) error {
 	query := deleteJobSQL(s.dialect, s.jobsTable())
 	result, err := s.db.ExecContext(ctx, query, string(id))
@@ -151,7 +116,6 @@ func (s *Store) DeleteJob(ctx context.Context, id scheduler.JobID) error {
 	return nil
 }
 
-// GetJob retrieves a single job record.
 func (s *Store) GetJob(ctx context.Context, id scheduler.JobID) (*scheduler.JobRecord, error) {
 	query := getJobSQL(s.dialect, s.jobsTable())
 	row := s.db.QueryRowContext(ctx, query, string(id))
@@ -165,16 +129,6 @@ func (s *Store) GetJob(ctx context.Context, id scheduler.JobID) (*scheduler.JobR
 	return rec, nil
 }
 
-// AcquireNextJobs finds due jobs and claims them (WAITING → ACQUIRED) in a single transaction.
-// Uses FOR UPDATE SKIP LOCKED so concurrent instances each see only unlocked rows,
-// distributing work fairly. The per-row UPDATE still includes WHERE state = 'WAITING'
-// as a safety net against edge cases (e.g., recovery between SELECT and UPDATE).
-//
-// Flow:
-//  1. BEGIN tx
-//  2. SELECT due jobs ... FOR UPDATE SKIP LOCKED
-//  3. UPDATE each job SET state = 'ACQUIRED' WHERE state = 'WAITING'
-//  4. COMMIT
 func (s *Store) AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*scheduler.JobRecord, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -199,7 +153,6 @@ func (s *Store) AcquireNextJobs(ctx context.Context, now time.Time, instanceID s
 	return acquired, nil
 }
 
-// selectAndClaimDueJobs queries for due jobs and updates each to ACQUIRED within the given tx.
 func (s *Store) selectAndClaimDueJobs(ctx context.Context, tx *sql.Tx, now time.Time, instanceID string) ([]*scheduler.JobRecord, error) {
 	selectQuery := listDueJobsSQL(s.dialect, s.jobsTable())
 	rows, err := tx.QueryContext(ctx, selectQuery, scheduler.StateWaiting, now)
@@ -245,8 +198,6 @@ func (s *Store) selectAndClaimDueJobs(ctx context.Context, tx *sql.Tx, now time.
 	return acquired, nil
 }
 
-// ReleaseJob transitions a job from ACQUIRED back to WAITING with the new next fire time.
-// If nextFireTime is zero (e.g., OnceTrigger completed), the job is set to COMPLETE.
 func (s *Store) ReleaseJob(ctx context.Context, id scheduler.JobID, nextFireTime time.Time) error {
 	state := scheduler.StateWaiting
 	if nextFireTime.IsZero() {
@@ -262,9 +213,6 @@ func (s *Store) ReleaseJob(ctx context.Context, id scheduler.JobID, nextFireTime
 	return nil
 }
 
-// RecoverStaleJobs resets jobs stuck in ACQUIRED state longer than the threshold.
-// For jobs with a timeout_secs longer than the threshold, the timeout is used instead
-// to avoid recovering jobs that are still legitimately running.
 func (s *Store) RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error) {
 	now := time.Now()
 	thresholdSecs := int64(threshold / time.Second)
@@ -279,7 +227,6 @@ func (s *Store) RecoverStaleJobs(ctx context.Context, threshold time.Duration) (
 	return int(n), nil
 }
 
-// NextFireTime returns the earliest next_fire_time among WAITING enabled jobs.
 func (s *Store) NextFireTime(ctx context.Context) (time.Time, error) {
 	query := nextFireTimeSQL(s.dialect, s.jobsTable())
 	var t sql.NullTime
@@ -289,8 +236,6 @@ func (s *Store) NextFireTime(ctx context.Context) (time.Time, error) {
 	return t.Time, nil
 }
 
-// Init implements scheduler.JobStoreInitializer.
-// When InitializeSchema is set to InitSchemaAlways, it creates the schema.
 func (s *Store) Init(ctx context.Context) error {
 	if s.initializeSchema == InitSchemaAlways {
 		return s.CreateSchema(ctx)
@@ -298,9 +243,6 @@ func (s *Store) Init(ctx context.Context) error {
 	return nil
 }
 
-// --- scan helpers ---
-
-// scanner is satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
 	Scan(dest ...any) error
 }

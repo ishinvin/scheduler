@@ -18,12 +18,7 @@ const (
 	defaultCleanupTimeout   = 5 * time.Second
 )
 
-// JobStore is the single persistence and coordination interface.
-// Implementations handle storage and state transitions internally.
-//
-// Two built-in implementations:
-//   - memory.Store — in-memory, single-instance
-//   - jdbc.Store   — SQL-backed, safe for multi-instance deployments
+// JobStore is the persistence interface for job scheduling.
 type JobStore interface {
 	// SaveJob persists or updates a job definition.
 	SaveJob(ctx context.Context, rec *JobRecord) error
@@ -34,33 +29,26 @@ type JobStore interface {
 	// GetJob retrieves a single job record.
 	GetJob(ctx context.Context, id JobID) (*JobRecord, error)
 
-	// AcquireNextJobs atomically finds due jobs and claims them for execution
-	// (WAITING → ACQUIRED) in a single operation. Returns already-acquired records.
-	// Called each poll cycle by the scheduler's run loop.
+	// AcquireNextJobs finds due jobs and claims them (WAITING → ACQUIRED).
 	AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*JobRecord, error)
 
 	// ReleaseJob transitions a job back to WAITING with updated next fire time.
-	// Called after execution completes.
 	ReleaseJob(ctx context.Context, id JobID, nextFireTime time.Time) error
 
-	// RecoverStaleJobs resets jobs stuck in ACQUIRED state longer than the
-	// given threshold back to WAITING. Returns the number of recovered jobs.
+	// RecoverStaleJobs resets jobs stuck in ACQUIRED longer than the threshold.
 	RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error)
 
 	// NextFireTime returns the earliest next_fire_time among WAITING enabled jobs.
-	// Returns zero time if no jobs are scheduled.
 	NextFireTime(ctx context.Context) (time.Time, error)
 }
 
-// JobStoreInitializer is an optional interface that a JobStore may implement
-// to perform initialization (e.g., schema creation) before the scheduler starts.
+// JobStoreInitializer is an optional interface for store initialization.
 type JobStoreInitializer interface {
 	// Init is called once by the scheduler before the run loop begins.
 	Init(ctx context.Context) error
 }
 
 // Scheduler orchestrates job scheduling using a pluggable JobStore.
-// The store is the sole source of truth for scheduling state.
 type Scheduler struct {
 	handlers         sync.Map // JobID → func(ctx context.Context) error
 	store            JobStore
@@ -77,11 +65,7 @@ type Scheduler struct {
 	wg     sync.WaitGroup
 }
 
-// New creates a new Scheduler with the given options.
-// A JobStore must be provided via WithJobStore (e.g., memory.New() or jdbc.New()).
-// If the store implements JobStoreInitializer, Init is called during construction
-// (e.g., schema creation for JDBC stores with InitSchemaAlways).
-// Default: silent logging, UTC timezone, 15s poll interval.
+// New creates a new Scheduler. A JobStore must be provided via WithJobStore.
 func New(ctx context.Context, opts ...Option) (*Scheduler, error) {
 	s := &Scheduler{
 		verbose:          false,
@@ -100,7 +84,7 @@ func New(ctx context.Context, opts ...Option) (*Scheduler, error) {
 		o(s)
 	}
 
-	// Initialize the store (e.g., schema creation) if it supports it.
+	// Initialize the store if it supports it.
 	if init, ok := s.store.(JobStoreInitializer); ok {
 		if err := init.Init(ctx); err != nil {
 			return nil, fmt.Errorf("scheduler: store init: %w", err)
@@ -110,20 +94,13 @@ func New(ctx context.Context, opts ...Option) (*Scheduler, error) {
 	return s, nil
 }
 
-// Register adds a job to the scheduler and persists it to the job store.
-//
-// If Fn is set, it is stored as the handler for this job ID, so that
-// jobs loaded from the store can resolve their execution function.
-//
+// Register adds a job to the scheduler and persists it to the store.
 // If Trigger is nil, only the handler is registered (no job is scheduled).
-// This is useful on restart to provide Fn for jobs already in the store.
 func (s *Scheduler) Register(ctx context.Context, job Job) error {
-	// Store Fn as handler keyed by job ID.
 	if job.Fn != nil {
 		s.handlers.Store(job.ID, job.Fn)
 	}
 
-	// Handler-only registration — no scheduling.
 	if job.Trigger == nil {
 		return nil
 	}
@@ -132,7 +109,7 @@ func (s *Scheduler) Register(ctx context.Context, job Job) error {
 		return fmt.Errorf("scheduler: no job store configured (use WithJobStore)")
 	}
 
-	// Idempotent: if the job already exists, just keep the handler registered above.
+	// Idempotent: skip if the job already exists.
 	if _, err := s.store.GetJob(ctx, job.ID); !errors.Is(err, ErrJobNotFound) {
 		return err
 	}
@@ -195,8 +172,7 @@ func (s *Scheduler) Delete(ctx context.Context, id JobID) error {
 	return nil
 }
 
-// Run starts the scheduling loop. It blocks until ctx is canceled,
-// then waits for in-flight jobs to complete before returning.
+// Run starts the scheduling loop. Blocks until ctx is canceled.
 func (s *Scheduler) Run(ctx context.Context) error {
 	if s.store == nil {
 		return fmt.Errorf("scheduler: no job store configured (use WithJobStore)")
@@ -205,13 +181,13 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	s.ctx = ctx
 	s.logInfo("scheduler starting", "instance", s.instanceID, "poll_interval", s.pollInterval, "misfire_threshold", s.misfireThreshold)
 
-	// Start stale job recovery ticker.
+	// Stale job recovery ticker.
 	var recoveryTicker *time.Ticker
 	var recoveryC <-chan time.Time
 	if s.misfireThreshold > 0 {
 		recoveryTicker = time.NewTicker(s.misfireThreshold / 2)
 		recoveryC = recoveryTicker.C
-		// Run recovery once at startup.
+		// Recovery once at startup.
 		s.recoverStaleJobs()
 	}
 	defer func() {
@@ -230,7 +206,6 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 		if len(records) > 0 {
 			s.logInfo("acquired jobs", "count", len(records))
-			// Sort by fire time for precise scheduling.
 			sort.Slice(records, func(i, j int) bool {
 				return records[i].NextFireTime.Before(records[j].NextFireTime)
 			})
@@ -251,8 +226,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}
 }
 
-// waitForEvent blocks until the timer expires, a signal arrives, recovery fires,
-// or the context is canceled. Returns true if the scheduler should stop.
+// waitForEvent blocks until timer, signal, recovery, or ctx cancel. Returns true to stop.
 func (s *Scheduler) waitForEvent(wait time.Duration, recoveryC <-chan time.Time) bool {
 	timer := time.NewTimer(wait)
 	select {
@@ -272,9 +246,7 @@ func (s *Scheduler) waitForEvent(wait time.Duration, recoveryC <-chan time.Time)
 	}
 }
 
-// dispatchBatch processes a sorted batch of acquired jobs.
-// For each job, it waits until the fire time, then dispatches.
-// Returns true if the caller should re-poll immediately.
+// dispatchBatch waits for each job's fire time and dispatches it. Returns true to re-poll.
 func (s *Scheduler) dispatchBatch(records []*JobRecord, recoveryC <-chan time.Time) bool {
 	for i, rec := range records {
 		// Wait until fire time.
@@ -291,8 +263,6 @@ func (s *Scheduler) dispatchBatch(records []*JobRecord, recoveryC <-chan time.Ti
 }
 
 // waitUntil blocks until duration elapses. Returns (interrupted, shouldReloop).
-// interrupted=true if ctx canceled or wakeUp received.
-// shouldReloop=true if the caller should re-poll (wakeUp), false if shutting down (ctx).
 func (s *Scheduler) waitUntil(d time.Duration, recoveryC <-chan time.Time) (interrupted, reloop bool) {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -306,12 +276,12 @@ func (s *Scheduler) waitUntil(d time.Duration, recoveryC <-chan time.Time) (inte
 			return true, true
 		case <-recoveryC:
 			s.recoverStaleJobs()
-			// Continue waiting — recovery doesn't affect current batch.
+			// Recovery doesn't affect current batch.
 		}
 	}
 }
 
-// dispatchJob resolves the handler and launches the job goroutine.
+// dispatchJob resolves the handler and launches the job.
 func (s *Scheduler) dispatchJob(rec *JobRecord) {
 	fn := s.resolveHandler(rec.ID)
 	if fn == nil {
@@ -339,7 +309,7 @@ func (s *Scheduler) dispatchJob(rec *JobRecord) {
 	go s.executeJob(job)
 }
 
-// releaseRemaining releases acquired-but-unfired jobs back to WAITING.
+// releaseRemaining releases unfired jobs back to WAITING.
 func (s *Scheduler) releaseRemaining(records []*JobRecord) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), s.cleanupTimeout)
 	defer cancel()
@@ -350,7 +320,7 @@ func (s *Scheduler) releaseRemaining(records []*JobRecord) {
 	}
 }
 
-// resolveHandler looks up the Fn for a job ID from the handler registry.
+// resolveHandler looks up the Fn for a job ID.
 func (s *Scheduler) resolveHandler(id JobID) func(ctx context.Context) error {
 	v, ok := s.handlers.Load(id)
 	if !ok {
@@ -359,11 +329,10 @@ func (s *Scheduler) resolveHandler(id JobID) func(ctx context.Context) error {
 	return v.(func(ctx context.Context) error)
 }
 
-// executeJob runs a single already-acquired job.
+// executeJob runs an acquired job.
 func (s *Scheduler) executeJob(job Job) {
 	defer s.wg.Done()
 
-	// Build execution context with optional timeout.
 	var execCtx context.Context
 	var execCancel context.CancelFunc
 	if job.Timeout > 0 {
@@ -375,11 +344,7 @@ func (s *Scheduler) executeJob(job Job) {
 
 	err := job.Fn(execCtx)
 
-	// Compute next fire time for release.
 	nextFire := job.Trigger.NextFireTime(time.Now().In(s.location))
-
-	// Release job back to WAITING with updated next fire time.
-	// Use a detached context so cleanup completes even during shutdown.
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), s.cleanupTimeout)
 	defer cleanupCancel()
 
@@ -395,7 +360,7 @@ func (s *Scheduler) executeJob(job Job) {
 	}
 }
 
-// recoverStaleJobs resets jobs stuck in ACQUIRED state past the misfire threshold.
+// recoverStaleJobs resets jobs stuck in ACQUIRED past the misfire threshold.
 func (s *Scheduler) recoverStaleJobs() {
 	n, err := s.store.RecoverStaleJobs(s.ctx, s.misfireThreshold)
 	if err != nil {
@@ -407,7 +372,7 @@ func (s *Scheduler) recoverStaleJobs() {
 	}
 }
 
-// waitForInFlight waits for in-flight jobs to finish, bounded by shutdownTimeout.
+// waitForInFlight waits for running jobs to finish, bounded by shutdownTimeout.
 func (s *Scheduler) waitForInFlight() {
 	done := make(chan struct{})
 	go func() {
@@ -423,8 +388,7 @@ func (s *Scheduler) waitForInFlight() {
 	}
 }
 
-// nextPollWait returns how long to sleep before the next poll.
-// Uses the store's earliest fire time for precision; falls back to pollInterval.
+// nextPollWait returns the wait duration until the next poll.
 func (s *Scheduler) nextPollWait() time.Duration {
 	next, err := s.store.NextFireTime(s.ctx)
 	if err != nil || next.IsZero() {
