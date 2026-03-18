@@ -161,7 +161,6 @@ type JobStore interface {
     GetJob(ctx context.Context, id JobID) (*JobRecord, error)
     AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*JobRecord, error)
     ReleaseJob(ctx context.Context, id JobID, nextFireTime time.Time) error
-    RecordExecution(ctx context.Context, exec *ExecutionRecord) error
     RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error)
     Close() error
 }
@@ -187,10 +186,9 @@ The `AND state = 'WAITING'` condition on each UPDATE acts as an optimistic lock.
 
 ### JDBC Store Tables
 
-| Table                  | Purpose                                                          |
-| ---------------------- | ---------------------------------------------------------------- |
-| `scheduler_jobs`       | Job definitions with state (`WAITING` / `ACQUIRED` / `COMPLETE`) |
-| `scheduler_executions` | Execution audit log                                              |
+| Table            | Purpose                                                          |
+| ---------------- | ---------------------------------------------------------------- |
+| `scheduler_jobs` | Job definitions with state (`WAITING` / `ACQUIRED` / `COMPLETE`) |
 
 ### Supported Databases
 
@@ -290,7 +288,7 @@ scheduler/
 ├── scheduler.go        # Scheduler core, store-driven run loop
 ├── job.go              # JobID, Job, Trigger interface
 ├── trigger.go          # CronTrigger, OnceTrigger, IntervalTrigger
-├── interfaces.go       # JobStore interface, JobRecord, ExecutionRecord
+├── interfaces.go       # JobStore interface, JobRecord
 ├── options.go          # Functional options
 ├── logger.go           # Default slog logger
 ├── errors.go           # Sentinel errors

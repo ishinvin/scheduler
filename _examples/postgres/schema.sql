@@ -23,15 +23,3 @@ CREATE TABLE IF NOT EXISTS scheduler_jobs (
 CREATE INDEX IF NOT EXISTS idx_sched_jobs_fire
     ON scheduler_jobs (next_fire_time)
     WHERE state = 'WAITING' AND enabled = TRUE;
-
-CREATE TABLE IF NOT EXISTS scheduler_executions (
-    id          BIGSERIAL PRIMARY KEY,
-    job_id      TEXT NOT NULL,
-    instance_id TEXT,
-    started_at  TIMESTAMPTZ NOT NULL,
-    finished_at TIMESTAMPTZ NOT NULL,
-    error       TEXT DEFAULT ''
-);
-
-CREATE INDEX IF NOT EXISTS idx_sched_exec_job
-    ON scheduler_executions (job_id, started_at DESC);

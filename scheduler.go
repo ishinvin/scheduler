@@ -15,22 +15,20 @@ const (
 	defaultPollInterval     = 15 * time.Second
 	defaultShutdownTimeout  = 30 * time.Second
 	defaultCleanupTimeout   = 5 * time.Second
-	purgeInterval           = 24 * time.Hour
 )
 
 // Scheduler orchestrates job scheduling using a pluggable JobStore.
 // The store is the sole source of truth for scheduling state.
 type Scheduler struct {
-	handlers           sync.Map // JobID → func(ctx context.Context) error
-	store              JobStore
-	logger             Logger
-	location           *time.Location
-	instanceID         string
-	misfireThreshold   time.Duration
-	pollInterval       time.Duration
-	shutdownTimeout    time.Duration
-	cleanupTimeout     time.Duration
-	executionRetention time.Duration
+	handlers         sync.Map // JobID → func(ctx context.Context) error
+	store            JobStore
+	logger           Logger
+	location         *time.Location
+	instanceID       string
+	misfireThreshold time.Duration
+	pollInterval     time.Duration
+	shutdownTimeout  time.Duration
+	cleanupTimeout   time.Duration
 
 	ctx    context.Context
 	wakeUp chan struct{}
@@ -170,19 +168,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		// Run recovery once at startup.
 		s.recoverStaleJobs()
 	}
-	// Start execution retention purge (once per day) in a background goroutine.
-	var purgeStop chan struct{}
-	if s.executionRetention > 0 {
-		purgeStop = make(chan struct{})
-		go s.runPurgeLoop(purgeStop)
-	}
-
 	defer func() {
 		if recoveryTicker != nil {
 			recoveryTicker.Stop()
-		}
-		if purgeStop != nil {
-			close(purgeStop)
 		}
 	}()
 
@@ -337,12 +325,10 @@ func (s *Scheduler) executeJob(job Job) {
 	}
 	defer execCancel()
 
-	startedAt := time.Now()
 	err := job.Fn(execCtx)
-	finishedAt := time.Now().In(s.location)
 
 	// Compute next fire time for release.
-	nextFire := job.Trigger.NextFireTime(finishedAt)
+	nextFire := job.Trigger.NextFireTime(time.Now().In(s.location))
 
 	// Release job back to WAITING with updated next fire time.
 	// Use a detached context so cleanup completes even during shutdown.
@@ -353,20 +339,6 @@ func (s *Scheduler) executeJob(job Job) {
 		s.logger.Error("failed to release job", "job", job.ID, "error", releaseErr)
 	} else {
 		s.signal() // wake the poll loop so it picks up the next fire time promptly
-	}
-
-	// Record execution.
-	rec := &ExecutionRecord{
-		JobID:      job.ID,
-		Instance:   s.instanceID,
-		StartedAt:  startedAt,
-		FinishedAt: finishedAt,
-	}
-	if err != nil {
-		rec.Err = err.Error()
-	}
-	if storeErr := s.store.RecordExecution(cleanupCtx, rec); storeErr != nil {
-		s.logger.Error("failed to record execution", "job", job.ID, "error", storeErr)
 	}
 
 	if err != nil {
@@ -383,34 +355,6 @@ func (s *Scheduler) recoverStaleJobs() {
 	}
 	if n > 0 {
 		s.logger.Info("recovered stale jobs", "count", n)
-	}
-}
-
-// runPurgeLoop periodically deletes old execution records.
-func (s *Scheduler) runPurgeLoop(stop <-chan struct{}) {
-	s.purgeOldExecutions()
-	ticker := time.NewTicker(purgeInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			s.purgeOldExecutions()
-		case <-stop:
-			return
-		}
-	}
-}
-
-// purgeOldExecutions deletes execution records older than the retention period.
-func (s *Scheduler) purgeOldExecutions() {
-	before := time.Now().Add(-s.executionRetention)
-	n, err := s.store.PurgeExecutions(s.ctx, before)
-	if err != nil {
-		s.logger.Error("failed to purge old executions", "error", err)
-		return
-	}
-	if n > 0 {
-		s.logger.Info("purged old execution records", "count", n)
 	}
 }
 

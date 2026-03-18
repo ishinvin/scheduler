@@ -17,13 +17,3 @@ CREATE TABLE IF NOT EXISTS scheduler_jobs (
     updated_at     DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     INDEX idx_sched_jobs_fire (next_fire_time, state, enabled)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-CREATE TABLE IF NOT EXISTS scheduler_executions (
-    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-    job_id      VARCHAR(255) NOT NULL,
-    instance_id VARCHAR(255),
-    started_at  DATETIME(6)  NOT NULL,
-    finished_at DATETIME(6)  NOT NULL,
-    error       TEXT,
-    INDEX idx_sched_exec_job (job_id, started_at DESC)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

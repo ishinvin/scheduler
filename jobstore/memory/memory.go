@@ -101,10 +101,6 @@ func (s *Store) ReleaseJob(_ context.Context, id scheduler.JobID, nextFireTime t
 	return nil
 }
 
-func (*Store) RecordExecution(_ context.Context, _ *scheduler.ExecutionRecord) error {
-	return nil
-}
-
 // RecoverStaleJobs resets jobs stuck in ACQUIRED state longer than the threshold.
 // For jobs with a Timeout longer than the threshold, the timeout is used instead
 // to avoid recovering jobs that are still legitimately running.
@@ -148,10 +144,6 @@ func (s *Store) NextFireTime(_ context.Context) (time.Time, error) {
 		}
 	}
 	return earliest, nil
-}
-
-func (*Store) PurgeExecutions(_ context.Context, _ time.Time) (int, error) {
-	return 0, nil
 }
 
 func (*Store) Close() error {

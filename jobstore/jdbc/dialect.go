@@ -97,24 +97,11 @@ func releaseJobSQL(d Dialect, table string) string {
 		col(d, "job_id"), d.Placeholder(4)) //nolint:mnd // placeholder index
 }
 
-func insertExecutionSQL(d Dialect, table string) string {
-	return fmt.Sprintf(
-		"INSERT INTO %s (%s, %s, %s, %s, %s) VALUES (%s, %s, %s, %s, %s)",
-		table,
-		col(d, "job_id"), col(d, "instance_id"), col(d, "started_at"), col(d, "finished_at"), col(d, "error"),
-		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3), d.Placeholder(4), d.Placeholder(5)) //nolint:mnd // placeholder indices
-}
-
 func nextFireTimeSQL(d Dialect, table string) string {
 	return fmt.Sprintf("SELECT MIN(%s) FROM %s WHERE %s = %s AND %s = %s",
 		col(d, "next_fire_time"), table,
 		col(d, "state"), d.Placeholder(1),
 		col(d, "enabled"), d.BooleanTrue())
-}
-
-func purgeExecutionsSQL(d Dialect, table string) string {
-	return fmt.Sprintf("DELETE FROM %s WHERE %s < %s",
-		table, col(d, "finished_at"), d.Placeholder(1))
 }
 
 func recoverStaleJobsSQL(d Dialect, table string) string {

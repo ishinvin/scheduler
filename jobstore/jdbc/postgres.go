@@ -30,18 +30,6 @@ CREATE TABLE IF NOT EXISTS ` + prefix + `scheduler_jobs (
 CREATE INDEX IF NOT EXISTS idx_` + prefix + `sched_jobs_fire
     ON ` + prefix + `scheduler_jobs (next_fire_time)
     WHERE state = 'WAITING' AND enabled = TRUE;
-
-CREATE TABLE IF NOT EXISTS ` + prefix + `scheduler_executions (
-    id          BIGSERIAL PRIMARY KEY,
-    job_id      TEXT NOT NULL,
-    instance_id TEXT,
-    started_at  TIMESTAMPTZ NOT NULL,
-    finished_at TIMESTAMPTZ NOT NULL,
-    error       TEXT DEFAULT ''
-);
-
-CREATE INDEX IF NOT EXISTS idx_` + prefix + `sched_exec_job
-    ON ` + prefix + `scheduler_executions (job_id, started_at DESC);
 `
 }
 

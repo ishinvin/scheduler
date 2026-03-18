@@ -28,9 +28,8 @@ const (
 // Per-job optimistic locking (WHERE state = 'WAITING') ensures safe concurrent
 // access across multiple scheduler instances without a separate lock table.
 //
-// Tables required:
-//   - {prefix}scheduler_jobs       — job definitions with state and next_fire_time
-//   - {prefix}scheduler_executions — execution audit log
+// Table required:
+//   - {prefix}scheduler_jobs — job definitions with state and next_fire_time
 type Store struct {
 	db               *sql.DB
 	dialect          Dialect
@@ -44,8 +43,7 @@ func (s *Store) table(name string) string {
 	return col(s.dialect, s.tablePrefix+name)
 }
 
-func (s *Store) jobsTable() string  { return s.table("scheduler_jobs") }
-func (s *Store) execsTable() string { return s.table("scheduler_executions") }
+func (s *Store) jobsTable() string { return s.table("scheduler_jobs") }
 
 // Option configures a JDBC Store.
 type Option func(*Store)
@@ -265,18 +263,6 @@ func (s *Store) ReleaseJob(ctx context.Context, id scheduler.JobID, nextFireTime
 	return nil
 }
 
-// RecordExecution logs a completed execution for audit.
-func (s *Store) RecordExecution(ctx context.Context, exec *scheduler.ExecutionRecord) error {
-	query := insertExecutionSQL(s.dialect, s.execsTable())
-	_, err := s.db.ExecContext(ctx, query,
-		string(exec.JobID), exec.Instance, exec.StartedAt, exec.FinishedAt, exec.Err,
-	)
-	if err != nil {
-		return fmt.Errorf("jdbc store: record execution: %w", err)
-	}
-	return nil
-}
-
 // RecoverStaleJobs resets jobs stuck in ACQUIRED state longer than the threshold.
 // For jobs with a timeout_secs longer than the threshold, the timeout is used instead
 // to avoid recovering jobs that are still legitimately running.
@@ -302,17 +288,6 @@ func (s *Store) NextFireTime(ctx context.Context) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("jdbc store: next fire time: %w", err)
 	}
 	return t.Time, nil
-}
-
-// PurgeExecutions deletes execution records older than the given time.
-func (s *Store) PurgeExecutions(ctx context.Context, before time.Time) (int, error) {
-	query := purgeExecutionsSQL(s.dialect, s.execsTable())
-	result, err := s.db.ExecContext(ctx, query, before)
-	if err != nil {
-		return 0, fmt.Errorf("jdbc store: purge executions: %w", err)
-	}
-	n, _ := result.RowsAffected()
-	return int(n), nil
 }
 
 // Close releases any resources held by the store.

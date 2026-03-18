@@ -46,7 +46,7 @@ func WithShutdownTimeout(d time.Duration) Option {
 }
 
 // WithCleanupTimeout sets the maximum time for post-execution cleanup
-// (ReleaseJob + RecordExecution) after a job finishes. Default is 5s.
+// (ReleaseJob) after a job finishes. Default is 5s.
 // Uses a detached context so cleanup completes even during shutdown.
 func WithCleanupTimeout(d time.Duration) Option {
 	return func(sc *Scheduler) {
@@ -63,17 +63,6 @@ func WithPollInterval(d time.Duration) Option {
 	return func(sc *Scheduler) {
 		if d > 0 {
 			sc.pollInterval = d
-		}
-	}
-}
-
-// WithExecutionRetention sets how long execution records are kept before
-// automatic purging. Default is 0 (no purge — records are kept forever).
-// When set, the scheduler periodically deletes records older than the retention period.
-func WithExecutionRetention(d time.Duration) Option {
-	return func(sc *Scheduler) {
-		if d > 0 {
-			sc.executionRetention = d
 		}
 	}
 }

@@ -30,9 +30,6 @@ type JobStore interface {
 	// Called after execution completes.
 	ReleaseJob(ctx context.Context, id JobID, nextFireTime time.Time) error
 
-	// RecordExecution logs a completed execution for audit.
-	RecordExecution(ctx context.Context, exec *ExecutionRecord) error
-
 	// RecoverStaleJobs resets jobs stuck in ACQUIRED state longer than the
 	// given threshold back to WAITING. Returns the number of recovered jobs.
 	RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error)
@@ -40,10 +37,6 @@ type JobStore interface {
 	// NextFireTime returns the earliest next_fire_time among WAITING enabled jobs.
 	// Returns zero time if no jobs are scheduled.
 	NextFireTime(ctx context.Context) (time.Time, error)
-
-	// PurgeExecutions deletes execution records older than the given time.
-	// Returns the number of deleted records.
-	PurgeExecutions(ctx context.Context, before time.Time) (int, error)
 
 	// Close releases any resources held by the store.
 	Close() error

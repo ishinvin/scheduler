@@ -42,12 +42,3 @@ type JobRecord struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
-
-// ExecutionRecord captures a single run of a job.
-type ExecutionRecord struct {
-	JobID      JobID
-	Instance   string
-	StartedAt  time.Time
-	FinishedAt time.Time
-	Err        string
-}
