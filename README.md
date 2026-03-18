@@ -294,12 +294,10 @@ See the [\_examples/](_examples/) directory:
 
 ```
 scheduler/
-├── scheduler.go        # Scheduler core, store-driven run loop
-├── job.go              # JobID, Job, Trigger interface
+├── scheduler.go        # Scheduler core, JobStore interface, run loop
+├── job.go              # JobID, Job, JobRecord, Trigger interface
 ├── trigger.go          # CronTrigger, OnceTrigger, IntervalTrigger
-├── interfaces.go       # JobStore interface, JobRecord
 ├── options.go          # Functional options
-├── logger.go           # Verbose logging via slog
 ├── errors.go           # Sentinel errors
 ├── scheduler_test.go   # Tests
 ├── jobstore/

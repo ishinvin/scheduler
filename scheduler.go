@@ -18,6 +18,47 @@ const (
 	defaultCleanupTimeout   = 5 * time.Second
 )
 
+// JobStore is the single persistence and coordination interface.
+// Implementations handle storage and state transitions internally.
+//
+// Two built-in implementations:
+//   - memory.Store — in-memory, single-instance
+//   - jdbc.Store   — SQL-backed, safe for multi-instance deployments
+type JobStore interface {
+	// SaveJob persists or updates a job definition.
+	SaveJob(ctx context.Context, rec *JobRecord) error
+
+	// DeleteJob removes a job by ID.
+	DeleteJob(ctx context.Context, id JobID) error
+
+	// GetJob retrieves a single job record.
+	GetJob(ctx context.Context, id JobID) (*JobRecord, error)
+
+	// AcquireNextJobs atomically finds due jobs and claims them for execution
+	// (WAITING → ACQUIRED) in a single operation. Returns already-acquired records.
+	// Called each poll cycle by the scheduler's run loop.
+	AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*JobRecord, error)
+
+	// ReleaseJob transitions a job back to WAITING with updated next fire time.
+	// Called after execution completes.
+	ReleaseJob(ctx context.Context, id JobID, nextFireTime time.Time) error
+
+	// RecoverStaleJobs resets jobs stuck in ACQUIRED state longer than the
+	// given threshold back to WAITING. Returns the number of recovered jobs.
+	RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error)
+
+	// NextFireTime returns the earliest next_fire_time among WAITING enabled jobs.
+	// Returns zero time if no jobs are scheduled.
+	NextFireTime(ctx context.Context) (time.Time, error)
+}
+
+// JobStoreInitializer is an optional interface that a JobStore may implement
+// to perform initialization (e.g., schema creation) before the scheduler starts.
+type JobStoreInitializer interface {
+	// Init is called once by the scheduler before the run loop begins.
+	Init(ctx context.Context) error
+}
+
 // Scheduler orchestrates job scheduling using a pluggable JobStore.
 // The store is the sole source of truth for scheduling state.
 type Scheduler struct {
@@ -40,7 +81,7 @@ type Scheduler struct {
 // A JobStore must be provided via WithJobStore (e.g., memory.New() or jdbc.New()).
 // If the store implements JobStoreInitializer, Init is called during construction
 // (e.g., schema creation for JDBC stores with InitSchemaAlways).
-// Default: slog logger, UTC timezone, 30s poll interval.
+// Default: silent logging, UTC timezone, 15s poll interval.
 func New(ctx context.Context, opts ...Option) (*Scheduler, error) {
 	s := &Scheduler{
 		verbose:          false,
