@@ -206,17 +206,16 @@ func (s *Store) selectAndClaimDueJobs(ctx context.Context, tx *sql.Tx, now time.
 	if err != nil {
 		return nil, fmt.Errorf("jdbc store: list due jobs: %w", err)
 	}
+	defer rows.Close()
 
 	var dueJobs []*scheduler.JobRecord
 	for rows.Next() {
 		rec, err := s.scanJob(rows)
 		if err != nil {
-			rows.Close()
 			return nil, fmt.Errorf("jdbc store: scan due job: %w", err)
 		}
 		dueJobs = append(dueJobs, rec)
 	}
-	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("jdbc store: iterate due jobs: %w", err)
 	}
@@ -288,11 +287,6 @@ func (s *Store) NextFireTime(ctx context.Context) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("jdbc store: next fire time: %w", err)
 	}
 	return t.Time, nil
-}
-
-// Close releases any resources held by the store.
-func (*Store) Close() error {
-	return nil
 }
 
 // Init implements scheduler.JobStoreInitializer.

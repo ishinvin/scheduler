@@ -37,9 +37,6 @@ type JobStore interface {
 	// NextFireTime returns the earliest next_fire_time among WAITING enabled jobs.
 	// Returns zero time if no jobs are scheduled.
 	NextFireTime(ctx context.Context) (time.Time, error)
-
-	// Close releases any resources held by the store.
-	Close() error
 }
 
 // JobStoreInitializer is an optional interface that a JobStore may implement

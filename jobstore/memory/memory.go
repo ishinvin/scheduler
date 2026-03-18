@@ -145,7 +145,3 @@ func (s *Store) NextFireTime(_ context.Context) (time.Time, error) {
 	}
 	return earliest, nil
 }
-
-func (*Store) Close() error {
-	return nil
-}
