@@ -24,8 +24,27 @@ const (
 
 type signal = struct{}
 
-// Scheduler orchestrates job scheduling using a pluggable job store.
-type Scheduler struct {
+// Scheduler is the public interface for job scheduling.
+type Scheduler interface {
+	// Register adds a job to the scheduler and persists it to the store.
+	// If Trigger is nil, only the handler is registered (no job is scheduled).
+	Register(ctx context.Context, job Job) error
+
+	// Reschedule creates or updates a job with the given trigger.
+	Reschedule(ctx context.Context, job Job) error
+
+	// Exists checks whether a job with the given ID exists in the store.
+	Exists(ctx context.Context, id string) (bool, error)
+
+	// Delete removes a job from the scheduler and the job store.
+	Delete(ctx context.Context, id string) error
+
+	// Run starts the scheduling loop. Blocks until ctx is canceled.
+	Run(ctx context.Context) error
+}
+
+// scheduler is the concrete implementation of Scheduler.
+type scheduler struct {
 	handlers         sync.Map // job ID -> func(ctx context.Context) error
 	store            store.JobStore
 	verbose          bool
@@ -48,8 +67,8 @@ type Scheduler struct {
 }
 
 // New creates a new Scheduler.
-func New(ctx context.Context, opts ...Option) (*Scheduler, error) {
-	s := &Scheduler{
+func New(ctx context.Context, opts ...Option) (Scheduler, error) {
+	s := &scheduler{
 		verbose:          false,
 		location:         time.UTC,
 		misfireThreshold: defaultMisfireThreshold,
@@ -83,7 +102,7 @@ func New(ctx context.Context, opts ...Option) (*Scheduler, error) {
 
 // Register adds a job to the scheduler and persists it to the store.
 // If Trigger is nil, only the handler is registered (no job is scheduled).
-func (s *Scheduler) Register(ctx context.Context, job Job) error {
+func (s *scheduler) Register(ctx context.Context, job Job) error {
 	if job.Fn != nil {
 		s.handlers.Store(job.ID, job.Fn)
 	}
@@ -115,7 +134,7 @@ func (s *Scheduler) Register(ctx context.Context, job Job) error {
 }
 
 // Reschedule creates or updates a job with the given trigger.
-func (s *Scheduler) Reschedule(ctx context.Context, job Job) error {
+func (s *scheduler) Reschedule(ctx context.Context, job Job) error {
 	if job.Fn != nil {
 		s.handlers.Store(job.ID, job.Fn)
 	}
@@ -150,8 +169,20 @@ func (s *Scheduler) Reschedule(ctx context.Context, job Job) error {
 	return nil
 }
 
+// Exists checks whether a job with the given ID exists in the store.
+func (s *scheduler) Exists(ctx context.Context, id string) (bool, error) {
+	_, err := s.store.GetJob(ctx, id)
+	if errors.Is(err, store.ErrJobNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("scheduler: check job: %w", err)
+	}
+	return true, nil
+}
+
 // Delete removes a job from the scheduler and the job store.
-func (s *Scheduler) Delete(ctx context.Context, id string) error {
+func (s *scheduler) Delete(ctx context.Context, id string) error {
 	if err := s.store.DeleteJob(ctx, id); err != nil {
 		if errors.Is(err, store.ErrJobNotFound) {
 			return ErrJobNotFound
@@ -165,7 +196,7 @@ func (s *Scheduler) Delete(ctx context.Context, id string) error {
 }
 
 // Run starts the scheduling loop. Blocks until ctx is canceled.
-func (s *Scheduler) Run(ctx context.Context) error {
+func (s *scheduler) Run(ctx context.Context) error {
 	if s.store == nil {
 		return fmt.Errorf("scheduler: no job store configured")
 	}
@@ -219,7 +250,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 }
 
 // waitForEvent blocks until timer, signal, recovery, or ctx cancel. Returns true to stop.
-func (s *Scheduler) waitForEvent(wait time.Duration, recoveryC <-chan time.Time) bool {
+func (s *scheduler) waitForEvent(wait time.Duration, recoveryC <-chan time.Time) bool {
 	timer := time.NewTimer(wait)
 	select {
 	case <-timer.C:
@@ -239,7 +270,7 @@ func (s *Scheduler) waitForEvent(wait time.Duration, recoveryC <-chan time.Time)
 }
 
 // dispatchBatch waits for each job's fire time and dispatches it. Returns true to re-poll.
-func (s *Scheduler) dispatchBatch(records []*store.JobRecord, recoveryC <-chan time.Time) bool {
+func (s *scheduler) dispatchBatch(records []*store.JobRecord, recoveryC <-chan time.Time) bool {
 	for i, rec := range records {
 		// Wait until fire time.
 		if delay := time.Until(rec.NextFireTime); delay > 0 {
@@ -255,7 +286,7 @@ func (s *Scheduler) dispatchBatch(records []*store.JobRecord, recoveryC <-chan t
 }
 
 // waitUntil blocks until duration elapses. Returns (interrupted, shouldReloop).
-func (s *Scheduler) waitUntil(d time.Duration, recoveryC <-chan time.Time) (interrupted, reloop bool) {
+func (s *scheduler) waitUntil(d time.Duration, recoveryC <-chan time.Time) (interrupted, reloop bool) {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	for {
@@ -274,7 +305,7 @@ func (s *Scheduler) waitUntil(d time.Duration, recoveryC <-chan time.Time) (inte
 }
 
 // dispatchJob resolves the handler and launches the job.
-func (s *Scheduler) dispatchJob(rec *store.JobRecord) {
+func (s *scheduler) dispatchJob(rec *store.JobRecord) {
 	fn := s.resolveHandler(rec.ID)
 	if fn == nil {
 		_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
@@ -302,7 +333,7 @@ func (s *Scheduler) dispatchJob(rec *store.JobRecord) {
 }
 
 // releaseRemaining releases unfired jobs back to WAITING.
-func (s *Scheduler) releaseRemaining(records []*store.JobRecord) {
+func (s *scheduler) releaseRemaining(records []*store.JobRecord) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), s.cleanupTimeout)
 	defer cancel()
 	for _, rec := range records {
@@ -313,7 +344,7 @@ func (s *Scheduler) releaseRemaining(records []*store.JobRecord) {
 }
 
 // resolveHandler looks up the Fn for a job ID.
-func (s *Scheduler) resolveHandler(id string) func(ctx context.Context) error {
+func (s *scheduler) resolveHandler(id string) func(ctx context.Context) error {
 	v, ok := s.handlers.Load(id)
 	if !ok {
 		return nil
@@ -322,7 +353,7 @@ func (s *Scheduler) resolveHandler(id string) func(ctx context.Context) error {
 }
 
 // executeJob runs an acquired job.
-func (s *Scheduler) executeJob(job Job) {
+func (s *scheduler) executeJob(job Job) {
 	defer s.wg.Done()
 
 	var execCtx context.Context
@@ -353,7 +384,7 @@ func (s *Scheduler) executeJob(job Job) {
 }
 
 // recoverStaleJobs resets jobs stuck in ACQUIRED past the misfire threshold.
-func (s *Scheduler) recoverStaleJobs() {
+func (s *scheduler) recoverStaleJobs() {
 	n, err := s.store.RecoverStaleJobs(s.ctx, s.misfireThreshold)
 	if err != nil {
 		s.logError("failed to recover stale jobs", "error", err)
@@ -365,7 +396,7 @@ func (s *Scheduler) recoverStaleJobs() {
 }
 
 // waitForInFlight waits for running jobs to finish, bounded by shutdownTimeout.
-func (s *Scheduler) waitForInFlight() {
+func (s *scheduler) waitForInFlight() {
 	done := make(chan signal)
 	go func() {
 		s.wg.Wait()
@@ -381,7 +412,7 @@ func (s *Scheduler) waitForInFlight() {
 }
 
 // nextPollWait returns the wait duration until the next poll.
-func (s *Scheduler) nextPollWait() time.Duration {
+func (s *scheduler) nextPollWait() time.Duration {
 	next, err := s.store.NextFireTime(s.ctx)
 	if err != nil || next.IsZero() {
 		return s.pollInterval
@@ -396,7 +427,7 @@ func (s *Scheduler) nextPollWait() time.Duration {
 	return wait
 }
 
-func (s *Scheduler) signal() {
+func (s *scheduler) signal() {
 	select {
 	case s.wakeUp <- signal{}:
 	default:
@@ -451,13 +482,13 @@ func triggerFromRecord(rec *store.JobRecord) (Trigger, error) {
 	}
 }
 
-func (s *Scheduler) logInfo(msg string, keysAndValues ...any) {
+func (s *scheduler) logInfo(msg string, keysAndValues ...any) {
 	if s.verbose {
 		slog.Info(msg, keysAndValues...)
 	}
 }
 
-func (s *Scheduler) logError(msg string, keysAndValues ...any) {
+func (s *scheduler) logError(msg string, keysAndValues ...any) {
 	if s.verbose {
 		slog.Error(msg, keysAndValues...)
 	}

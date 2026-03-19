@@ -9,7 +9,7 @@ import (
 	"github.com/ishinvin/scheduler"
 )
 
-func newTestScheduler(t *testing.T) *scheduler.Scheduler {
+func newTestScheduler(t *testing.T) scheduler.Scheduler {
 	t.Helper()
 	s, err := scheduler.New(context.Background(),
 		scheduler.WithMemoryStore(),
