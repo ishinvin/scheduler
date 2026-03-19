@@ -25,7 +25,7 @@ type signal = struct{}
 
 // Scheduler orchestrates job scheduling using a pluggable job store.
 type Scheduler struct {
-	handlers         sync.Map // JobID -> func(ctx context.Context) error
+	handlers         sync.Map // job ID -> func(ctx context.Context) error
 	store            store.JobStore
 	verbose          bool
 	location         *time.Location
@@ -96,7 +96,7 @@ func (s *Scheduler) Register(ctx context.Context, job Job) error {
 	}
 
 	// Idempotent: skip if the job already exists.
-	if _, err := s.store.GetJob(ctx, store.JobID(job.ID)); !errors.Is(err, store.ErrJobNotFound) {
+	if _, err := s.store.GetJob(ctx, job.ID); !errors.Is(err, store.ErrJobNotFound) {
 		return err
 	}
 
@@ -127,7 +127,7 @@ func (s *Scheduler) Reschedule(ctx context.Context, job Job) error {
 	next := job.Trigger.NextFireTime(now)
 	record := jobToRecord(&job, next)
 
-	rec, err := s.store.GetJob(ctx, store.JobID(job.ID))
+	rec, err := s.store.GetJob(ctx, job.ID)
 	if errors.Is(err, store.ErrJobNotFound) {
 		if err := s.store.CreateJob(ctx, record); err != nil {
 			return fmt.Errorf("scheduler: reschedule job: %w", err)
@@ -150,8 +150,8 @@ func (s *Scheduler) Reschedule(ctx context.Context, job Job) error {
 }
 
 // Delete removes a job from the scheduler and the job store.
-func (s *Scheduler) Delete(ctx context.Context, id JobID) error {
-	if err := s.store.DeleteJob(ctx, store.JobID(id)); err != nil {
+func (s *Scheduler) Delete(ctx context.Context, id string) error {
+	if err := s.store.DeleteJob(ctx, id); err != nil {
 		return fmt.Errorf("scheduler: delete job: %w", err)
 	}
 	s.handlers.Delete(id)
@@ -271,7 +271,7 @@ func (s *Scheduler) waitUntil(d time.Duration, recoveryC <-chan time.Time) (inte
 
 // dispatchJob resolves the handler and launches the job.
 func (s *Scheduler) dispatchJob(rec *store.JobRecord) {
-	fn := s.resolveHandler(JobID(rec.ID))
+	fn := s.resolveHandler(rec.ID)
 	if fn == nil {
 		_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
 		return
@@ -285,7 +285,7 @@ func (s *Scheduler) dispatchJob(rec *store.JobRecord) {
 	}
 
 	job := Job{
-		ID:      JobID(rec.ID),
+		ID:      rec.ID,
 		Name:    rec.Name,
 		Trigger: trigger,
 		Fn:      fn,
@@ -309,7 +309,7 @@ func (s *Scheduler) releaseRemaining(records []*store.JobRecord) {
 }
 
 // resolveHandler looks up the Fn for a job ID.
-func (s *Scheduler) resolveHandler(id JobID) func(ctx context.Context) error {
+func (s *Scheduler) resolveHandler(id string) func(ctx context.Context) error {
 	v, ok := s.handlers.Load(id)
 	if !ok {
 		return nil
@@ -337,7 +337,7 @@ func (s *Scheduler) executeJob(job Job) {
 	defer cleanupCancel()
 
 	s.logInfo("job completed", "job", job.ID, "next", nextFire)
-	if releaseErr := s.store.ReleaseJob(cleanupCtx, store.JobID(job.ID), nextFire); releaseErr != nil {
+	if releaseErr := s.store.ReleaseJob(cleanupCtx, job.ID, nextFire); releaseErr != nil {
 		s.logError("failed to release job", "job", job.ID, "error", releaseErr)
 	} else {
 		s.signal() // wake the poll loop so it picks up the next fire time promptly
@@ -402,7 +402,7 @@ func (s *Scheduler) signal() {
 // jobToRecord converts a Job to a store.JobRecord.
 func jobToRecord(job *Job, nextFire time.Time) *store.JobRecord {
 	rec := &store.JobRecord{
-		ID:           store.JobID(job.ID),
+		ID:           job.ID,
 		Name:         job.Name,
 		Timeout:      job.Timeout,
 		NextFireTime: nextFire,

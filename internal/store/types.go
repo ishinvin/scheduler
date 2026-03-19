@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// JobID is a unique string identifier for a job.
-type JobID string
-
 // JobState represents the lifecycle state of a job.
 type JobState string
 
@@ -32,7 +29,7 @@ const (
 
 // JobRecord is the serializable representation of a job in the store.
 type JobRecord struct {
-	ID           JobID
+	ID           string
 	Name         string
 	TriggerType  string        // "cron", "once", "interval"
 	TriggerValue string        // cron expr, RFC3339 time, or duration string
@@ -55,16 +52,16 @@ type JobStore interface {
 	UpdateJob(ctx context.Context, rec *JobRecord) error
 
 	// DeleteJob removes a job by ID.
-	DeleteJob(ctx context.Context, id JobID) error
+	DeleteJob(ctx context.Context, id string) error
 
 	// GetJob retrieves a single job record.
-	GetJob(ctx context.Context, id JobID) (*JobRecord, error)
+	GetJob(ctx context.Context, id string) (*JobRecord, error)
 
 	// AcquireNextJobs finds due jobs and claims them (WAITING -> ACQUIRED).
 	AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*JobRecord, error)
 
 	// ReleaseJob transitions a job back to WAITING with updated next fire time.
-	ReleaseJob(ctx context.Context, id JobID, nextFireTime time.Time) error
+	ReleaseJob(ctx context.Context, id string, nextFireTime time.Time) error
 
 	// RecoverStaleJobs resets jobs stuck in ACQUIRED longer than the threshold.
 	RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error)

@@ -5,12 +5,9 @@ import (
 	"time"
 )
 
-// JobID is a unique string identifier for a job.
-type JobID string
-
 // Job is the unit of work the scheduler manages.
 type Job struct {
-	ID      JobID
+	ID      string
 	Name    string
 	Trigger Trigger
 	Fn      func(ctx context.Context) error

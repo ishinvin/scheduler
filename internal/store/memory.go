@@ -9,13 +9,13 @@ import (
 // MemoryStore is an in-memory JobStore implementation.
 type MemoryStore struct {
 	mu   sync.RWMutex
-	jobs map[JobID]*JobRecord
+	jobs map[string]*JobRecord
 }
 
 // NewMemory creates a new in-memory job store.
 func NewMemory() *MemoryStore {
 	return &MemoryStore{
-		jobs: make(map[JobID]*JobRecord),
+		jobs: make(map[string]*JobRecord),
 	}
 }
 
@@ -49,7 +49,7 @@ func (s *MemoryStore) UpdateJob(_ context.Context, job *JobRecord) error {
 	return nil
 }
 
-func (s *MemoryStore) DeleteJob(_ context.Context, id JobID) error {
+func (s *MemoryStore) DeleteJob(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.jobs[id]; !ok {
@@ -59,7 +59,7 @@ func (s *MemoryStore) DeleteJob(_ context.Context, id JobID) error {
 	return nil
 }
 
-func (s *MemoryStore) GetJob(_ context.Context, id JobID) (*JobRecord, error) {
+func (s *MemoryStore) GetJob(_ context.Context, id string) (*JobRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	job, ok := s.jobs[id]
@@ -91,7 +91,7 @@ func (s *MemoryStore) AcquireNextJobs(_ context.Context, now time.Time, instance
 }
 
 // ReleaseJob transitions a job back to WAITING, or COMPLETE if nextFireTime is zero.
-func (s *MemoryStore) ReleaseJob(_ context.Context, id JobID, nextFireTime time.Time) error {
+func (s *MemoryStore) ReleaseJob(_ context.Context, id string, nextFireTime time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job, ok := s.jobs[id]

@@ -78,7 +78,7 @@ func (s *JDBCStore) CreateSchema(ctx context.Context) error {
 func (s *JDBCStore) CreateJob(ctx context.Context, job *JobRecord) error {
 	now := time.Now()
 	timeoutSecs := int64(job.Timeout / time.Second)
-	if _, err := s.db.ExecContext(ctx, s.q.insert, string(job.ID), job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, StateWaiting, "", nil, job.Enabled, now, now); err != nil { //nolint:lll // readable
+	if _, err := s.db.ExecContext(ctx, s.q.insert, job.ID, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, StateWaiting, "", nil, job.Enabled, now, now); err != nil { //nolint:lll // readable
 		return fmt.Errorf("jdbc store: create job: %w", err)
 	}
 	return nil
@@ -86,14 +86,14 @@ func (s *JDBCStore) CreateJob(ctx context.Context, job *JobRecord) error {
 
 func (s *JDBCStore) UpdateJob(ctx context.Context, job *JobRecord) error {
 	timeoutSecs := int64(job.Timeout / time.Second)
-	if _, err := s.db.ExecContext(ctx, s.q.update, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, job.Enabled, time.Now(), string(job.ID)); err != nil { //nolint:lll // readable
+	if _, err := s.db.ExecContext(ctx, s.q.update, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, job.Enabled, time.Now(), job.ID); err != nil { //nolint:lll // readable
 		return fmt.Errorf("jdbc store: update job: %w", err)
 	}
 	return nil
 }
 
-func (s *JDBCStore) DeleteJob(ctx context.Context, id JobID) error {
-	result, err := s.db.ExecContext(ctx, s.q.delete, string(id))
+func (s *JDBCStore) DeleteJob(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, s.q.delete, id)
 	if err != nil {
 		return fmt.Errorf("jdbc store: delete job: %w", err)
 	}
@@ -104,8 +104,8 @@ func (s *JDBCStore) DeleteJob(ctx context.Context, id JobID) error {
 	return nil
 }
 
-func (s *JDBCStore) GetJob(ctx context.Context, id JobID) (*JobRecord, error) {
-	row := s.db.QueryRowContext(ctx, s.q.get, string(id))
+func (s *JDBCStore) GetJob(ctx context.Context, id string) (*JobRecord, error) {
+	row := s.db.QueryRowContext(ctx, s.q.get, id)
 	rec, err := s.scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrJobNotFound
@@ -159,7 +159,7 @@ func (s *JDBCStore) AcquireNextJobs(ctx context.Context, now time.Time, instance
 	ts := time.Now()
 	var acquired []*JobRecord
 	for _, rec := range dueJobs {
-		result, err := tx.ExecContext(ctx, s.q.acquire, StateAcquired, instanceID, ts, ts, string(rec.ID), StateWaiting)
+		result, err := tx.ExecContext(ctx, s.q.acquire, StateAcquired, instanceID, ts, ts, rec.ID, StateWaiting)
 		if err != nil {
 			_ = tx.Rollback()
 			return nil, fmt.Errorf("jdbc store: claim job %s: %w", rec.ID, err)
@@ -179,12 +179,12 @@ func (s *JDBCStore) AcquireNextJobs(ctx context.Context, now time.Time, instance
 	return acquired, nil
 }
 
-func (s *JDBCStore) ReleaseJob(ctx context.Context, id JobID, nextFireTime time.Time) error {
+func (s *JDBCStore) ReleaseJob(ctx context.Context, id string, nextFireTime time.Time) error {
 	state := StateWaiting
 	if nextFireTime.IsZero() {
 		state = StateComplete
 	}
-	if _, err := s.db.ExecContext(ctx, s.q.release, state, nextFireTime, time.Now(), string(id)); err != nil {
+	if _, err := s.db.ExecContext(ctx, s.q.release, state, nextFireTime, time.Now(), id); err != nil {
 		return fmt.Errorf("jdbc store: release job: %w", err)
 	}
 	return nil
@@ -222,14 +222,12 @@ type scanner interface {
 
 func (*JDBCStore) scanJob(sc scanner) (*JobRecord, error) {
 	var rec JobRecord
-	var id string
 	var timeoutSecs int64
 	var instanceID sql.NullString
 	var acquiredAt sql.NullTime
-	if err := sc.Scan(&id, &rec.Name, &rec.TriggerType, &rec.TriggerValue, &timeoutSecs, &rec.NextFireTime, &rec.State, &instanceID, &acquiredAt, &rec.Enabled, &rec.CreatedAt, &rec.UpdatedAt); err != nil { //nolint:lll // column list
+	if err := sc.Scan(&rec.ID, &rec.Name, &rec.TriggerType, &rec.TriggerValue, &timeoutSecs, &rec.NextFireTime, &rec.State, &instanceID, &acquiredAt, &rec.Enabled, &rec.CreatedAt, &rec.UpdatedAt); err != nil { //nolint:lll // column list
 		return nil, err
 	}
-	rec.ID = JobID(id)
 	rec.Timeout = time.Duration(timeoutSecs) * time.Second
 	rec.InstanceID = instanceID.String
 	rec.AcquiredAt = acquiredAt.Time
