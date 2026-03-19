@@ -13,7 +13,6 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/ishinvin/scheduler"
-	"github.com/ishinvin/scheduler/jobstore/jdbc"
 )
 
 func main() {
@@ -34,14 +33,11 @@ func main() {
 	}
 	defer db.Close()
 
-	store := jdbc.New(db, jdbc.Postgres{},
-		jdbc.WithInitializeSchema(jdbc.InitSchemaAlways),
-	)
-
 	ctx := context.Background()
 
 	sched, err := scheduler.New(ctx,
-		scheduler.WithJobStore(store),
+		scheduler.WithPostgres(db),
+		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID(instanceID),
 	)
 	if err != nil {

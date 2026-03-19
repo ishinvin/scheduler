@@ -1,8 +1,8 @@
-package jdbc
+package store
 
 import "fmt"
 
-// Postgres implements Dialect for PostgreSQL.
+// Postgres implements dialect for PostgreSQL.
 type Postgres struct{}
 
 func (Postgres) Placeholder(index int) string { return fmt.Sprintf("$%d", index) }

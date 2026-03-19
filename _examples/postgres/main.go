@@ -13,7 +13,6 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/ishinvin/scheduler"
-	"github.com/ishinvin/scheduler/jobstore/jdbc"
 )
 
 func main() {
@@ -28,25 +27,11 @@ func main() {
 	}
 	defer db.Close()
 
-	// Create JDBC store with PostgreSQL dialect.
-	//
-	// initialize-schema options:
-	//   - jdbc.InitSchemaNever  (default) — you manage schema via Liquibase/Flyway/manual DDL
-	//   - jdbc.InitSchemaAlways — the library creates tables on startup (uses IF NOT EXISTS)
-	//
-	// To get the DDL for external migration tools:
-	//   fmt.Println(jdbc.Postgres{}.SchemaSQL(""))       // no prefix
-	//   fmt.Println(jdbc.Postgres{}.SchemaSQL("myapp_")) // with prefix
-	store := jdbc.New(db, jdbc.Postgres{},
-		jdbc.WithInstanceID("worker-1"),
-		jdbc.WithInitializeSchema(jdbc.InitSchemaAlways), // opt-in schema creation
-		// jdbc.WithTablePrefix("myapp_"),                // optional table prefix
-	)
-
 	ctx := context.Background()
 
 	sched, err := scheduler.New(ctx,
-		scheduler.WithJobStore(store),
+		scheduler.WithPostgres(db),
+		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID("worker-1"),
 	)
 	if err != nil {

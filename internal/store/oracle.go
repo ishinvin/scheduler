@@ -1,15 +1,16 @@
-package jdbc
+package store
 
 import (
 	"fmt"
 	"strings"
 )
 
-// Oracle implements Dialect for Oracle Database.
+// Oracle implements dialect for Oracle Database.
 type Oracle struct{}
 
 func (Oracle) Placeholder(index int) string { return fmt.Sprintf(":%d", index) }
 func (Oracle) BooleanTrue() string          { return "1" }
+func (Oracle) UppercaseIdentifiers() bool   { return true }
 
 func (Oracle) DateAddSQL(col, secondsExpr string) string {
 	return fmt.Sprintf("%s + NUMTODSINTERVAL(%s, 'SECOND')", col, secondsExpr)

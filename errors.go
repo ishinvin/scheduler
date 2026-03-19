@@ -1,8 +1,12 @@
 package scheduler
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/ishinvin/scheduler/internal/store"
+)
 
 var (
-	ErrJobNotFound = errors.New("scheduler: job not found")
+	ErrJobNotFound = store.ErrJobNotFound
 	ErrInvalidCron = errors.New("scheduler: invalid cron expression")
 )

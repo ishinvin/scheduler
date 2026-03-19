@@ -13,7 +13,6 @@ import (
 	_ "github.com/sijms/go-ora/v2"
 
 	"github.com/ishinvin/scheduler"
-	"github.com/ishinvin/scheduler/jobstore/jdbc"
 )
 
 func main() {
@@ -28,25 +27,11 @@ func main() {
 	}
 	defer db.Close()
 
-	// Create JDBC store with Oracle dialect.
-	//
-	// initialize-schema options:
-	//   - jdbc.InitSchemaNever  (default) — you manage schema via Liquibase/Flyway/manual DDL
-	//   - jdbc.InitSchemaAlways — the library creates tables on startup
-	//
-	// To get the DDL for external migration tools:
-	//   fmt.Println(jdbc.Oracle{}.SchemaSQL(""))       // no prefix
-	//   fmt.Println(jdbc.Oracle{}.SchemaSQL("myapp_")) // with prefix
-	store := jdbc.New(db, jdbc.Oracle{},
-		jdbc.WithInstanceID("worker-1"),
-		jdbc.WithInitializeSchema(jdbc.InitSchemaAlways), // opt-in schema creation
-		// jdbc.WithTablePrefix("myapp_"),                // optional table prefix
-	)
-
 	ctx := context.Background()
 
 	sched, err := scheduler.New(ctx,
-		scheduler.WithJobStore(store),
+		scheduler.WithOracle(db),
+		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID("worker-1"),
 	)
 	if err != nil {
@@ -54,7 +39,6 @@ func main() {
 	}
 
 	// Register jobs. These are persisted to Oracle and survive restarts.
-	// The Fn is stored by job ID so rehydrated jobs can resolve it on restart.
 	sched.Register(ctx, scheduler.Job{
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",

@@ -13,7 +13,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/ishinvin/scheduler"
-	"github.com/ishinvin/scheduler/jobstore/jdbc"
 )
 
 func main() {
@@ -28,19 +27,13 @@ func main() {
 	}
 	defer db.Close()
 
-	// Create JDBC store with custom MySQL dialect.
-	//
-	// The MySQL struct in dialect.go implements the jdbc.Dialect interface,
-	// demonstrating how to add support for any database.
-	store := jdbc.New(db, MySQL{},
-		jdbc.WithInstanceID("worker-1"),
-		jdbc.WithInitializeSchema(jdbc.InitSchemaAlways),
-	)
-
 	ctx := context.Background()
 
+	// Use WithJDBC with a custom MySQL dialect.
+	// This demonstrates how to add support for any database.
 	sched, err := scheduler.New(ctx,
-		scheduler.WithJobStore(store),
+		scheduler.WithJDBC(db, MySQL{}),
+		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID("worker-1"),
 	)
 	if err != nil {
@@ -48,7 +41,6 @@ func main() {
 	}
 
 	// Register jobs. These are persisted to MySQL and survive restarts.
-	// The Fn is stored by job ID so rehydrated jobs can resolve it on restart.
 	_ = sched.Register(ctx, scheduler.Job{
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",
