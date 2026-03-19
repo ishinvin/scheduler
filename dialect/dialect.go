@@ -1,4 +1,4 @@
-package scheduler
+package dialect
 
 // Dialect abstracts SQL differences between databases.
 // Implement this interface to add support for a custom database.

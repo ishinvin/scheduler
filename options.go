@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/ishinvin/scheduler/dialect"
 	"github.com/ishinvin/scheduler/internal/store"
 )
 
@@ -32,10 +33,10 @@ func WithOracle(db *sql.DB) Option {
 }
 
 // WithJDBC uses a SQL-backed job store with a custom Dialect.
-func WithJDBC(db *sql.DB, dialect Dialect) Option {
+func WithJDBC(db *sql.DB, d dialect.Dialect) Option {
 	return func(sc *Scheduler) {
 		sc.storeDB = db
-		sc.storeDialect = dialect
+		sc.storeDialect = d
 	}
 }
 

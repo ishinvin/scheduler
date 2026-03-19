@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Oracle implements dialect for Oracle Database.
+// Oracle implements dialect.Dialect for Oracle Database.
 type Oracle struct{}
 
 func (Oracle) Placeholder(index int) string { return fmt.Sprintf(":%d", index) }

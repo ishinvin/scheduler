@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ishinvin/scheduler/dialect"
 	"github.com/ishinvin/scheduler/internal/store"
 )
 
@@ -37,7 +38,7 @@ type Scheduler struct {
 
 	// JDBC store config (used in New to build the store).
 	storeDB      *sql.DB
-	storeDialect any // implements Dialect
+	storeDialect dialect.Dialect
 	tablePrefix  string
 	initSchema   store.InitializeSchema
 
@@ -152,6 +153,9 @@ func (s *Scheduler) Reschedule(ctx context.Context, job Job) error {
 // Delete removes a job from the scheduler and the job store.
 func (s *Scheduler) Delete(ctx context.Context, id string) error {
 	if err := s.store.DeleteJob(ctx, id); err != nil {
+		if errors.Is(err, store.ErrJobNotFound) {
+			return ErrJobNotFound
+		}
 		return fmt.Errorf("scheduler: delete job: %w", err)
 	}
 	s.handlers.Delete(id)

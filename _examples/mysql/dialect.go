@@ -2,7 +2,7 @@ package main
 
 import "fmt"
 
-// MySQL implements scheduler.Dialect for MySQL / MariaDB.
+// MySQL implements dialect.Dialect for MySQL / MariaDB.
 // This demonstrates how to create a custom dialect for any database.
 type MySQL struct{}
 

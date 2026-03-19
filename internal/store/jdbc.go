@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ishinvin/scheduler/dialect"
 )
 
 // jdbcQueries holds cached SQL strings, built once in NewJDBC.
@@ -25,33 +27,31 @@ type jdbcQueries struct {
 // JDBCStore implements JobStore backed by a SQL database.
 type JDBCStore struct {
 	db               *sql.DB
-	dialect          dialect
+	dialect          dialect.Dialect
 	tablePrefix      string
 	initializeSchema InitializeSchema
 	q                jdbcQueries
 }
 
 // NewJDBC creates a new JDBC-backed job store.
-// The dialect parameter must implement the scheduler.Dialect interface.
-func NewJDBC(db *sql.DB, d any, tablePrefix string, initSchema InitializeSchema) *JDBCStore {
-	dial := d.(dialect)
+func NewJDBC(db *sql.DB, d dialect.Dialect, tablePrefix string, initSchema InitializeSchema) *JDBCStore {
 	s := &JDBCStore{
 		db:               db,
-		dialect:          dial,
+		dialect:          d,
 		tablePrefix:      tablePrefix,
 		initializeSchema: initSchema,
 	}
-	t := dialectCol(dial, s.tablePrefix+"scheduler_jobs")
+	t := dialectCol(d, s.tablePrefix+"scheduler_jobs")
 	s.q = jdbcQueries{
-		insert:       insertJobSQL(dial, t),
-		update:       updateJobSQL(dial, t),
-		delete:       deleteJobSQL(dial, t),
-		get:          getJobSQL(dial, t),
-		listDue:      listDueJobsSQL(dial, t),
-		acquire:      acquireJobSQL(dial, t),
-		release:      releaseJobSQL(dial, t),
-		nextFireTime: nextFireTimeSQL(dial, t),
-		recoverStale: recoverStaleJobsSQL(dial, t),
+		insert:       insertJobSQL(d, t),
+		update:       updateJobSQL(d, t),
+		delete:       deleteJobSQL(d, t),
+		get:          getJobSQL(d, t),
+		listDue:      listDueJobsSQL(d, t),
+		acquire:      acquireJobSQL(d, t),
+		release:      releaseJobSQL(d, t),
+		nextFireTime: nextFireTimeSQL(d, t),
+		recoverStale: recoverStaleJobsSQL(d, t),
 	}
 	return s
 }

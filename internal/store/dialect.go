@@ -3,20 +3,14 @@ package store
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ishinvin/scheduler/dialect"
 )
 
 const jdbcColumns = `job_id, name, trigger_type, trigger_value, timeout_secs, next_fire_time, state, instance_id, acquired_at, enabled, created_at, updated_at` //nolint:lll // column list
 
-// dialect matches the public scheduler.Dialect interface.
-type dialect interface {
-	Placeholder(index int) string
-	BooleanTrue() string
-	SchemaSQL(prefix string) string
-	DateAddSQL(col, secondsExpr string) string
-}
-
 // dialectCol returns a column name, uppercased if the dialect requires it.
-func dialectCol(d dialect, name string) string {
+func dialectCol(d dialect.Dialect, name string) string {
 	type uppercaser interface{ UppercaseIdentifiers() bool }
 	if u, ok := d.(uppercaser); ok && u.UppercaseIdentifiers() {
 		return strings.ToUpper(name)
@@ -25,12 +19,12 @@ func dialectCol(d dialect, name string) string {
 }
 
 // dialectCols returns all columns, used in SELECT and INSERT.
-func dialectCols(d dialect) string {
+func dialectCols(d dialect.Dialect) string {
 	return dialectCol(d, jdbcColumns)
 }
 
 // insertJobSQL builds INSERT for CreateJob.
-func insertJobSQL(d dialect, table string) string {
+func insertJobSQL(d dialect.Dialect, table string) string {
 	return fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
 		table, dialectCols(d),
@@ -42,7 +36,7 @@ func insertJobSQL(d dialect, table string) string {
 }
 
 // updateJobSQL builds UPDATE for UpdateJob.
-func updateJobSQL(d dialect, table string) string {
+func updateJobSQL(d dialect.Dialect, table string) string {
 	return fmt.Sprintf(
 		"UPDATE %s SET %s = %s, %s = %s, %s = %s, %s = %s, %s = %s, %s = %s, %s = %s WHERE %s = %s",
 		table,
@@ -58,17 +52,17 @@ func updateJobSQL(d dialect, table string) string {
 }
 
 // deleteJobSQL builds DELETE for DeleteJob.
-func deleteJobSQL(d dialect, table string) string {
+func deleteJobSQL(d dialect.Dialect, table string) string {
 	return fmt.Sprintf("DELETE FROM %s WHERE %s = %s", table, dialectCol(d, "job_id"), d.Placeholder(1))
 }
 
 // getJobSQL builds SELECT for GetJob.
-func getJobSQL(d dialect, table string) string {
+func getJobSQL(d dialect.Dialect, table string) string {
 	return fmt.Sprintf("SELECT %s FROM %s WHERE %s = %s", dialectCols(d), table, dialectCol(d, "job_id"), d.Placeholder(1))
 }
 
 // listDueJobsSQL builds SELECT with FOR UPDATE SKIP LOCKED for AcquireNextJobs.
-func listDueJobsSQL(d dialect, table string) string {
+func listDueJobsSQL(d dialect.Dialect, table string) string {
 	return fmt.Sprintf(
 		"SELECT %s FROM %s WHERE %s = %s AND %s = %s AND %s <= %s ORDER BY %s FOR UPDATE SKIP LOCKED",
 		dialectCols(d), table,
@@ -80,7 +74,7 @@ func listDueJobsSQL(d dialect, table string) string {
 }
 
 // acquireJobSQL builds UPDATE to claim a job (WAITING -> ACQUIRED).
-func acquireJobSQL(d dialect, table string) string {
+func acquireJobSQL(d dialect.Dialect, table string) string {
 	return fmt.Sprintf(
 		"UPDATE %s SET %s = %s, %s = %s, %s = %s, %s = %s WHERE %s = %s AND %s = %s",
 		table,
@@ -94,7 +88,7 @@ func acquireJobSQL(d dialect, table string) string {
 }
 
 // releaseJobSQL builds UPDATE to release a job (ACQUIRED -> WAITING/COMPLETE).
-func releaseJobSQL(d dialect, table string) string {
+func releaseJobSQL(d dialect.Dialect, table string) string {
 	return fmt.Sprintf(
 		"UPDATE %s SET %s = %s, %s = NULL, %s = NULL, %s = %s, %s = %s WHERE %s = %s",
 		table,
@@ -108,7 +102,7 @@ func releaseJobSQL(d dialect, table string) string {
 }
 
 // nextFireTimeSQL builds SELECT MIN(next_fire_time) for NextFireTime.
-func nextFireTimeSQL(d dialect, table string) string {
+func nextFireTimeSQL(d dialect.Dialect, table string) string {
 	return fmt.Sprintf(
 		"SELECT MIN(%s) FROM %s WHERE %s = %s AND %s = %s",
 		dialectCol(d, "next_fire_time"), table,
@@ -118,7 +112,7 @@ func nextFireTimeSQL(d dialect, table string) string {
 }
 
 // recoverStaleJobsSQL builds UPDATE to reset jobs stuck in ACQUIRED past the threshold.
-func recoverStaleJobsSQL(d dialect, table string) string {
+func recoverStaleJobsSQL(d dialect.Dialect, table string) string {
 	staleExpr := d.DateAddSQL(
 		dialectCol(d, "acquired_at"),
 		fmt.Sprintf("GREATEST(%s, COALESCE(%s, 0))", d.Placeholder(4), dialectCol(d, "timeout_secs")), //nolint:mnd // placeholder index

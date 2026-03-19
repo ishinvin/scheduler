@@ -2,7 +2,7 @@ package store
 
 import "fmt"
 
-// Postgres implements dialect for PostgreSQL.
+// Postgres implements dialect.Dialect for PostgreSQL.
 type Postgres struct{}
 
 func (Postgres) Placeholder(index int) string { return fmt.Sprintf("$%d", index) }
