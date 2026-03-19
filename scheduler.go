@@ -20,8 +20,8 @@ const (
 
 // JobStore is the persistence interface for job scheduling.
 type JobStore interface {
-	// SaveJob persists or updates a job definition.
-	SaveJob(ctx context.Context, rec *JobRecord) error
+	CreateJob(ctx context.Context, rec *JobRecord) error
+	UpdateJob(ctx context.Context, rec *JobRecord) error
 
 	// DeleteJob removes a job by ID.
 	DeleteJob(ctx context.Context, id JobID) error
@@ -48,6 +48,8 @@ type JobStoreInitializer interface {
 	Init(ctx context.Context) error
 }
 
+type signal = struct{}
+
 // Scheduler orchestrates job scheduling using a pluggable JobStore.
 type Scheduler struct {
 	handlers         sync.Map // JobID → func(ctx context.Context) error
@@ -61,7 +63,7 @@ type Scheduler struct {
 	cleanupTimeout   time.Duration
 
 	ctx    context.Context
-	wakeUp chan struct{}
+	wakeUp chan signal
 	wg     sync.WaitGroup
 }
 
@@ -74,7 +76,7 @@ func New(ctx context.Context, opts ...Option) (*Scheduler, error) {
 		pollInterval:     defaultPollInterval,
 		shutdownTimeout:  defaultShutdownTimeout,
 		cleanupTimeout:   defaultCleanupTimeout,
-		wakeUp:           make(chan struct{}, 1),
+		wakeUp:           make(chan signal, 1),
 	}
 
 	hostname, _ := os.Hostname()
@@ -118,7 +120,7 @@ func (s *Scheduler) Register(ctx context.Context, job Job) error {
 	next := job.Trigger.NextFireTime(now)
 
 	record := jobToRecord(&job, next)
-	if err := s.store.SaveJob(ctx, record); err != nil {
+	if err := s.store.CreateJob(ctx, record); err != nil {
 		return fmt.Errorf("scheduler: register job: %w", err)
 	}
 
@@ -152,7 +154,7 @@ func (s *Scheduler) Reschedule(ctx context.Context, id JobID, trigger Trigger) e
 	updated.InstanceID = rec.InstanceID
 	updated.AcquiredAt = rec.AcquiredAt
 
-	if err := s.store.SaveJob(ctx, updated); err != nil {
+	if err := s.store.UpdateJob(ctx, updated); err != nil {
 		return fmt.Errorf("scheduler: reschedule job: %w", err)
 	}
 
@@ -374,7 +376,7 @@ func (s *Scheduler) recoverStaleJobs() {
 
 // waitForInFlight waits for running jobs to finish, bounded by shutdownTimeout.
 func (s *Scheduler) waitForInFlight() {
-	done := make(chan struct{})
+	done := make(chan signal)
 	go func() {
 		s.wg.Wait()
 		close(done)
@@ -406,7 +408,7 @@ func (s *Scheduler) nextPollWait() time.Duration {
 
 func (s *Scheduler) signal() {
 	select {
-	case s.wakeUp <- struct{}{}:
+	case s.wakeUp <- signal{}:
 	default:
 	}
 }

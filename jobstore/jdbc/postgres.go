@@ -35,20 +35,3 @@ CREATE INDEX IF NOT EXISTS idx_` + p + `sched_jobs_fire
     WHERE state = 'WAITING' AND enabled = TRUE;
 `
 }
-
-func (Postgres) UpsertJobSQL(table string) string {
-	return fmt.Sprintf(`
-INSERT INTO %s
-    (job_id, name, trigger_type, trigger_value, timeout_secs,
-     next_fire_time, state, enabled, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (job_id) DO UPDATE SET
-    name           = EXCLUDED.name,
-    trigger_type   = EXCLUDED.trigger_type,
-    trigger_value  = EXCLUDED.trigger_value,
-    timeout_secs   = EXCLUDED.timeout_secs,
-    next_fire_time = EXCLUDED.next_fire_time,
-    enabled        = EXCLUDED.enabled,
-    updated_at     = EXCLUDED.updated_at
-`, table)
-}

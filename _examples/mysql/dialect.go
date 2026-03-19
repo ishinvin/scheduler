@@ -33,20 +33,3 @@ CREATE TABLE IF NOT EXISTS ` + p + `scheduler_jobs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 `
 }
-
-func (MySQL) UpsertJobSQL(table string) string {
-	return fmt.Sprintf(`
-INSERT INTO %s
-    (job_id, name, trigger_type, trigger_value, timeout_secs,
-     next_fire_time, state, enabled, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON DUPLICATE KEY UPDATE
-    name           = VALUES(name),
-    trigger_type   = VALUES(trigger_type),
-    trigger_value  = VALUES(trigger_value),
-    timeout_secs   = VALUES(timeout_secs),
-    next_fire_time = VALUES(next_fire_time),
-    enabled        = VALUES(enabled),
-    updated_at     = VALUES(updated_at)
-`, table)
-}

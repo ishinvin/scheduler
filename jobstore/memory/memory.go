@@ -21,18 +21,30 @@ func New() *Store {
 	}
 }
 
-func (s *Store) SaveJob(_ context.Context, job *scheduler.JobRecord) error {
+func (s *Store) CreateJob(_ context.Context, job *scheduler.JobRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
-	if existing, ok := s.jobs[job.ID]; ok {
-		job.CreatedAt = existing.CreatedAt
-		job.UpdatedAt = now
-	} else {
-		job.CreatedAt = now
-		job.UpdatedAt = now
+	job.CreatedAt = now
+	job.UpdatedAt = now
+
+	cp := *job
+	s.jobs[job.ID] = &cp
+	return nil
+}
+
+func (s *Store) UpdateJob(_ context.Context, job *scheduler.JobRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, ok := s.jobs[job.ID]
+	if !ok {
+		return scheduler.ErrJobNotFound
 	}
+
+	job.CreatedAt = existing.CreatedAt
+	job.UpdatedAt = time.Now()
 
 	cp := *job
 	s.jobs[job.ID] = &cp

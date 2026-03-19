@@ -5,8 +5,7 @@ import (
 	"strings"
 )
 
-const columns = `job_id, name, trigger_type, trigger_value, timeout_secs,
-                 next_fire_time, state, instance_id, acquired_at, enabled, created_at, updated_at`
+const columns = `job_id, name, trigger_type, trigger_value, timeout_secs, next_fire_time, state, instance_id, acquired_at, enabled, created_at, updated_at` //nolint:lll // column list for queries
 
 // Dialect abstracts SQL differences between databases.
 type Dialect interface {
@@ -16,8 +15,6 @@ type Dialect interface {
 	BooleanTrue() string
 	// SchemaSQL returns DDL for the given table prefix.
 	SchemaSQL(prefix string) string
-	// UpsertJobSQL returns an upsert statement.
-	UpsertJobSQL(table string) string
 	// DateAddSQL returns "timestamp + N seconds" expression.
 	DateAddSQL(col, secondsExpr string) string
 }
@@ -31,6 +28,32 @@ func col(d Dialect, name string) string {
 
 func cols(d Dialect) string {
 	return col(d, columns)
+}
+
+func insertJobSQL(d Dialect, table string) string {
+	return fmt.Sprintf(
+		"INSERT INTO %s (%s) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+		table, cols(d),
+		d.Placeholder(1), d.Placeholder(2), d.Placeholder(3),
+		d.Placeholder(4), d.Placeholder(5), d.Placeholder(6), //nolint:mnd // placeholder index
+		d.Placeholder(7), d.Placeholder(8), d.Placeholder(9), //nolint:mnd // placeholder index
+		d.Placeholder(10), d.Placeholder(11), d.Placeholder(12), //nolint:mnd // placeholder index
+	)
+}
+
+func updateJobSQL(d Dialect, table string) string {
+	return fmt.Sprintf(
+		"UPDATE %s SET %s = %s, %s = %s, %s = %s, %s = %s, %s = %s, %s = %s, %s = %s WHERE %s = %s",
+		table,
+		col(d, "name"), d.Placeholder(1),
+		col(d, "trigger_type"), d.Placeholder(2),
+		col(d, "trigger_value"), d.Placeholder(3),
+		col(d, "timeout_secs"), d.Placeholder(4), //nolint:mnd // placeholder index
+		col(d, "next_fire_time"), d.Placeholder(5), //nolint:mnd // placeholder index
+		col(d, "enabled"), d.Placeholder(6), //nolint:mnd // placeholder index
+		col(d, "updated_at"), d.Placeholder(7), //nolint:mnd // placeholder index
+		col(d, "job_id"), d.Placeholder(8), //nolint:mnd // placeholder index
+	)
 }
 
 func deleteJobSQL(d Dialect, table string) string {

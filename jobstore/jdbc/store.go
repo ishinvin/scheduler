@@ -28,11 +28,9 @@ type Store struct {
 	initializeSchema InitializeSchema
 }
 
-func (s *Store) table(name string) string {
-	return col(s.dialect, s.tablePrefix+name)
+func (s *Store) jobsTable() string {
+	return col(s.dialect, s.tablePrefix+"scheduler_jobs")
 }
-
-func (s *Store) jobsTable() string { return s.table("scheduler_jobs") }
 
 type Option func(*Store)
 
@@ -63,7 +61,7 @@ func New(db *sql.DB, dialect Dialect, opts ...Option) *Store {
 
 func (s *Store) CreateSchema(ctx context.Context) error {
 	ddl := s.dialect.SchemaSQL(s.tablePrefix)
-	for _, stmt := range splitStatements(ddl) {
+	for _, stmt := range strings.Split(ddl, ";") {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
 			continue
@@ -75,30 +73,33 @@ func (s *Store) CreateSchema(ctx context.Context) error {
 	return nil
 }
 
-func splitStatements(ddl string) []string {
-	return strings.Split(ddl, ";")
-}
-
-func (s *Store) SaveJob(ctx context.Context, job *scheduler.JobRecord) error {
-	query := s.dialect.UpsertJobSQL(s.jobsTable())
+func (s *Store) CreateJob(ctx context.Context, job *scheduler.JobRecord) error {
+	query := insertJobSQL(s.dialect, s.jobsTable())
 	now := time.Now()
-
 	timeoutSecs := int64(job.Timeout / time.Second)
 
 	_, err := s.db.ExecContext(ctx, query,
-		string(job.ID),
-		job.Name,
-		job.TriggerType,
-		job.TriggerValue,
-		timeoutSecs,
-		job.NextFireTime,
-		scheduler.StateWaiting,
-		job.Enabled,
-		now,
-		now,
+		string(job.ID), job.Name, job.TriggerType, job.TriggerValue,
+		timeoutSecs, job.NextFireTime, scheduler.StateWaiting,
+		"", nil, job.Enabled, now, now,
 	)
 	if err != nil {
-		return fmt.Errorf("jdbc store: save job: %w", err)
+		return fmt.Errorf("jdbc store: create job: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateJob(ctx context.Context, job *scheduler.JobRecord) error {
+	query := updateJobSQL(s.dialect, s.jobsTable())
+	timeoutSecs := int64(job.Timeout / time.Second)
+
+	_, err := s.db.ExecContext(ctx, query,
+		job.Name, job.TriggerType, job.TriggerValue,
+		timeoutSecs, job.NextFireTime, job.Enabled,
+		time.Now(), string(job.ID),
+	)
+	if err != nil {
+		return fmt.Errorf("jdbc store: update job: %w", err)
 	}
 	return nil
 }
@@ -129,7 +130,11 @@ func (s *Store) GetJob(ctx context.Context, id scheduler.JobID) (*scheduler.JobR
 	return rec, nil
 }
 
+// AcquireNextJobs uses SELECT FOR UPDATE SKIP LOCKED + UPDATE within a single
+// transaction to atomically find and claim due jobs, preventing concurrent
+// instances from acquiring the same jobs.
 func (s *Store) AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*scheduler.JobRecord, error) {
+	// Dedicated connection ensures the transaction stays on one connection.
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("jdbc store: get conn: %w", err)
@@ -141,22 +146,10 @@ func (s *Store) AcquireNextJobs(ctx context.Context, now time.Time, instanceID s
 		return nil, fmt.Errorf("jdbc store: begin tx: %w", err)
 	}
 
-	acquired, err := s.selectAndClaimDueJobs(ctx, tx, now, instanceID)
+	// SELECT ... FOR UPDATE SKIP LOCKED: lock due rows, skip already-locked ones.
+	rows, err := tx.QueryContext(ctx, listDueJobsSQL(s.dialect, s.jobsTable()), scheduler.StateWaiting, now)
 	if err != nil {
 		_ = tx.Rollback()
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("jdbc store: commit acquire: %w", err)
-	}
-	return acquired, nil
-}
-
-func (s *Store) selectAndClaimDueJobs(ctx context.Context, tx *sql.Tx, now time.Time, instanceID string) ([]*scheduler.JobRecord, error) {
-	selectQuery := listDueJobsSQL(s.dialect, s.jobsTable())
-	rows, err := tx.QueryContext(ctx, selectQuery, scheduler.StateWaiting, now)
-	if err != nil {
 		return nil, fmt.Errorf("jdbc store: list due jobs: %w", err)
 	}
 	defer rows.Close()
@@ -165,18 +158,22 @@ func (s *Store) selectAndClaimDueJobs(ctx context.Context, tx *sql.Tx, now time.
 	for rows.Next() {
 		rec, err := s.scanJob(rows)
 		if err != nil {
+			_ = tx.Rollback()
 			return nil, fmt.Errorf("jdbc store: scan due job: %w", err)
 		}
 		dueJobs = append(dueJobs, rec)
 	}
 	if err := rows.Err(); err != nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("jdbc store: iterate due jobs: %w", err)
 	}
 
 	if len(dueJobs) == 0 {
+		_ = tx.Rollback()
 		return nil, nil
 	}
 
+	// Claim each locked row: WAITING → ACQUIRED.
 	ts := time.Now()
 	claimQuery := acquireJobSQL(s.dialect, s.jobsTable())
 	var acquired []*scheduler.JobRecord
@@ -185,6 +182,7 @@ func (s *Store) selectAndClaimDueJobs(ctx context.Context, tx *sql.Tx, now time.
 			scheduler.StateAcquired, instanceID, ts, ts, string(rec.ID), scheduler.StateWaiting,
 		)
 		if err != nil {
+			_ = tx.Rollback()
 			return nil, fmt.Errorf("jdbc store: claim job %s: %w", rec.ID, err)
 		}
 		n, _ := result.RowsAffected()
@@ -194,6 +192,10 @@ func (s *Store) selectAndClaimDueJobs(ctx context.Context, tx *sql.Tx, now time.
 			rec.AcquiredAt = ts
 			acquired = append(acquired, rec)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("jdbc store: commit acquire: %w", err)
 	}
 	return acquired, nil
 }
