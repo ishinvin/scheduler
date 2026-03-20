@@ -5,10 +5,21 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+
+	"github.com/ishinvin/scheduler/internal/store"
+)
+
+// Trigger type constants.
+const (
+	TriggerTypeCron     = "cron"
+	TriggerTypeOnce     = "once"
+	TriggerTypeInterval = "interval"
 )
 
 // Trigger determines when a Job should fire next.
 type Trigger interface {
+	// NextFireTime returns the next time the trigger should fire after the given time.
+	// Returns the zero time if the trigger will not fire again.
 	NextFireTime(after time.Time) time.Time
 	fmt.Stringer
 }
@@ -24,9 +35,9 @@ type CronTrigger struct {
 }
 
 // NewCronTrigger parses a cron expression and returns a CronTrigger.
-// Supports standard 5-field cron and optional seconds field via robfig/cron/v3.
+// Supports 6-field cron (second minute hour dom month dow) and descriptors.
 func NewCronTrigger(expr string) (*CronTrigger, error) {
-	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+	parser := cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 	schedule, err := parser.Parse(expr)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidCron, err)
@@ -87,4 +98,55 @@ func (i *IntervalTrigger) NextFireTime(after time.Time) time.Time {
 
 func (i *IntervalTrigger) String() string {
 	return fmt.Sprintf("every(%s)", i.Every)
+}
+
+// ---------------------------------------------------------------------------
+// Record conversion
+// ---------------------------------------------------------------------------
+
+// jobToRecord converts a Job to a store.JobRecord.
+func jobToRecord(job *Job, nextFire time.Time) *store.JobRecord {
+	rec := &store.JobRecord{
+		ID:           job.ID,
+		Name:         job.Name,
+		Timeout:      job.Timeout,
+		NextFireTime: nextFire,
+		State:        store.StateWaiting,
+	}
+
+	switch t := job.Trigger.(type) {
+	case *CronTrigger:
+		rec.TriggerType = TriggerTypeCron
+		rec.TriggerValue = t.Expr
+	case *OnceTrigger:
+		rec.TriggerType = TriggerTypeOnce
+		rec.TriggerValue = t.At.Format(time.RFC3339)
+	case *IntervalTrigger:
+		rec.TriggerType = TriggerTypeInterval
+		rec.TriggerValue = t.Every.String()
+	}
+
+	return rec
+}
+
+// triggerFromRecord reconstructs a Trigger from a stored JobRecord.
+func triggerFromRecord(rec *store.JobRecord) (Trigger, error) {
+	switch rec.TriggerType {
+	case TriggerTypeCron:
+		return NewCronTrigger(rec.TriggerValue)
+	case TriggerTypeOnce:
+		t, err := time.Parse(time.RFC3339, rec.TriggerValue)
+		if err != nil {
+			return nil, fmt.Errorf("invalid once trigger: %w", err)
+		}
+		return NewOnceTrigger(t), nil
+	case TriggerTypeInterval:
+		d, err := time.ParseDuration(rec.TriggerValue)
+		if err != nil {
+			return nil, fmt.Errorf("invalid interval trigger: %w", err)
+		}
+		return NewIntervalTrigger(d), nil
+	default:
+		return nil, fmt.Errorf("unknown trigger type: %s", rec.TriggerType)
+	}
 }

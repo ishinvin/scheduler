@@ -26,7 +26,7 @@ func main() {
 	sched.Register(scheduler.Job{
 		ID:      "cron-job",
 		Name:    "Every minute",
-		Trigger: must(scheduler.NewCronTrigger("* * * * *")),
+		Trigger: must(scheduler.NewCronTrigger("0 * * * * *")),
 		Timeout: 10 * time.Second,
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "cron job fired")

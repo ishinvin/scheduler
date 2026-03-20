@@ -43,7 +43,7 @@ func main() {
 	sched.Register(scheduler.Job{
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",
-		Trigger: must(scheduler.NewCronTrigger("*/5 * * * *")), // every 5 minutes
+		Trigger: must(scheduler.NewCronTrigger("0 */5 * * * *")), // every 5 minutes
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "running cleanup...")
 			return nil
@@ -53,7 +53,7 @@ func main() {
 	sched.Register(scheduler.Job{
 		ID:      "daily-report",
 		Name:    "Daily report",
-		Trigger: must(scheduler.NewCronTrigger("0 9 * * *")), // 9 AM daily
+		Trigger: must(scheduler.NewCronTrigger("0 0 9 * * *")), // 9 AM daily
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "generating report...")
 			return nil

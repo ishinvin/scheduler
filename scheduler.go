@@ -41,6 +41,15 @@ type Scheduler interface {
 	Run() error
 }
 
+// Job is the unit of work the scheduler manages.
+type Job struct {
+	ID      string
+	Name    string
+	Trigger Trigger
+	Fn      func(ctx context.Context) error
+	Timeout time.Duration // per-execution timeout; 0 = no timeout
+}
+
 // scheduler is the concrete implementation of Scheduler.
 type scheduler struct {
 	handlers         sync.Map // job ID -> func(ctx context.Context) error
@@ -417,53 +426,6 @@ func (s *scheduler) signal() {
 	select {
 	case s.wakeUp <- signal{}:
 	default:
-	}
-}
-
-// jobToRecord converts a Job to a store.JobRecord.
-func jobToRecord(job *Job, nextFire time.Time) *store.JobRecord {
-	rec := &store.JobRecord{
-		ID:           job.ID,
-		Name:         job.Name,
-		Timeout:      job.Timeout,
-		NextFireTime: nextFire,
-		State:        store.StateWaiting,
-	}
-
-	switch t := job.Trigger.(type) {
-	case *CronTrigger:
-		rec.TriggerType = "cron"
-		rec.TriggerValue = t.Expr
-	case *OnceTrigger:
-		rec.TriggerType = "once"
-		rec.TriggerValue = t.At.Format(time.RFC3339)
-	case *IntervalTrigger:
-		rec.TriggerType = "interval"
-		rec.TriggerValue = t.Every.String()
-	}
-
-	return rec
-}
-
-// triggerFromRecord reconstructs a Trigger from a stored JobRecord.
-func triggerFromRecord(rec *store.JobRecord) (Trigger, error) {
-	switch rec.TriggerType {
-	case "cron":
-		return NewCronTrigger(rec.TriggerValue)
-	case "once":
-		t, err := time.Parse(time.RFC3339, rec.TriggerValue)
-		if err != nil {
-			return nil, fmt.Errorf("invalid once trigger: %w", err)
-		}
-		return NewOnceTrigger(t), nil
-	case "interval":
-		d, err := time.ParseDuration(rec.TriggerValue)
-		if err != nil {
-			return nil, fmt.Errorf("invalid interval trigger: %w", err)
-		}
-		return NewIntervalTrigger(d), nil
-	default:
-		return nil, fmt.Errorf("unknown trigger type: %s", rec.TriggerType)
 	}
 }
 

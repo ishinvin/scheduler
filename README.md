@@ -4,7 +4,7 @@ A job scheduling library for Go with pluggable job stores and multi-instance sup
 
 ## Features
 
-- **Cron, interval, and one-time triggers** — standard 5-field cron expressions, fixed intervals, or fire-once at a specific time
+- **Cron, interval, and one-time triggers** — 6-field cron expressions (second granularity), fixed intervals, or fire-once at a specific time
 - **Register / Reschedule / Delete** jobs at runtime
 - **Built-in stores** — memory (single-instance) or JDBC (SQL-backed, multi-instance safe)
 - **Custom database support** — implement the `Dialect` interface to add any SQL database
@@ -54,7 +54,7 @@ func main() {
     sched.Register(scheduler.Job{
         ID:      "daily-report",
         Name:    "Generate daily report",
-        Trigger: must(scheduler.NewCronTrigger("0 9 * * *")),
+        Trigger: must(scheduler.NewCronTrigger("0 0 9 * * *")),
         Timeout: 30 * time.Second,
         Fn: func(ctx context.Context) error {
             fmt.Println("generating report...")
@@ -121,7 +121,7 @@ func main() {
     sched.Register(scheduler.Job{
         ID:      "welcome-email",
         Name:    "Send welcome emails",
-        Trigger: must(scheduler.NewCronTrigger("*/5 * * * *")),
+        Trigger: must(scheduler.NewCronTrigger("0 */5 * * * *")),
         Fn: func(ctx context.Context) error {
             // send email logic
             return nil
@@ -171,12 +171,12 @@ The store is always the source of truth — there is no in-memory scheduling sta
 
 ### Supported Databases
 
-| Database   | Option                                           |
-| ---------- | ------------------------------------------------ |
-| Memory     | `WithMemoryStore()`                              |
-| PostgreSQL | `WithJDBC(db, "postgres", tablePrefix)`          |
-| Oracle     | `WithJDBC(db, "oracle", tablePrefix)`            |
-| Custom     | `WithCustomJDBC(db, dialect, tablePrefix)`       |
+| Database   | Option                                     |
+| ---------- | ------------------------------------------ |
+| Memory     | `WithMemoryStore()`                        |
+| PostgreSQL | `WithJDBC(db, "postgres", tablePrefix)`    |
+| Oracle     | `WithJDBC(db, "oracle", tablePrefix)`      |
+| Custom     | `WithCustomJDBC(db, dialect, tablePrefix)` |
 
 ### JDBC Store — Acquire Flow
 
@@ -240,8 +240,8 @@ scheduler.WithCleanupTimeout(d)                      // Max wait for post-execut
 ### Triggers
 
 ```go
-// Cron expression (5-field standard + descriptors like @hourly)
-trigger, err := scheduler.NewCronTrigger("0 */6 * * *")
+// Cron expression (6-field: second minute hour dom month dow + descriptors like @hourly)
+trigger, err := scheduler.NewCronTrigger("0 0 */6 * * *")
 
 // Fixed interval
 trigger := scheduler.NewIntervalTrigger(30 * time.Second)
@@ -259,36 +259,6 @@ See the [\_examples/](_examples/) directory:
 - [\_examples/oracle/](_examples/oracle/) — multi-instance with Oracle
 - [\_examples/mysql/](_examples/mysql/) — custom MySQL dialect example
 - [\_examples/multi-instance/](_examples/multi-instance/) — Docker Compose with 3 replicas sharing PostgreSQL
-
-## Project Structure
-
-```
-scheduler/
-├── scheduler.go          # Scheduler core, run loop
-├── job.go                # Job struct
-├── trigger.go            # CronTrigger, OnceTrigger, IntervalTrigger
-├── options.go            # Functional options
-├── errors.go             # Sentinel errors
-├── scheduler_test.go     # Tests
-├── dialect/
-│   └── dialect.go        # Dialect interface (public, for custom databases)
-├── internal/
-│   └── store/
-│       ├── store.go      # JobStore interface, JobRecord, JobState
-│       ├── memory/
-│       │   └── memory.go # In-memory store
-│       └── jdbc/
-│           ├── jdbc.go     # SQL-backed store
-│           ├── dialect.go  # SQL query builders
-│           ├── postgres.go # PostgreSQL dialect
-│           └── oracle.go   # Oracle dialect
-└── _examples/
-    ├── memory/           # In-memory example
-    ├── postgres/         # PostgreSQL example
-    ├── oracle/           # Oracle example
-    ├── mysql/            # MySQL custom dialect example
-    └── multi-instance/   # Docker Compose multi-replica example
-```
 
 ## License
 

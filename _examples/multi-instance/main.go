@@ -60,7 +60,7 @@ func main() {
 		{
 			ID:      "cleanup",
 			Name:    "Periodic cleanup",
-			Trigger: must(scheduler.NewCronTrigger("*/1 * * * *")),
+			Trigger: must(scheduler.NewCronTrigger("0 */1 * * * *")),
 			Timeout: 30 * time.Second,
 			Fn: func(_ context.Context) error {
 				fmt.Printf("[%s] %s  cleanup\n", instanceID, time.Now().Format(time.TimeOnly))
