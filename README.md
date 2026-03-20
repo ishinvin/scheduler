@@ -66,7 +66,7 @@ func main() {
     sched.Register(scheduler.Job{
         ID:      "health-check",
         Name:    "Health check",
-        Trigger: scheduler.NewIntervalTrigger(30 * time.Second),
+        Trigger: must(scheduler.NewIntervalTrigger(30 * time.Second)),
         Fn: func(ctx context.Context) error {
             fmt.Println("checking health...")
             return nil
@@ -235,6 +235,7 @@ scheduler.WithPollInterval(d)                        // Safety fallback poll int
 scheduler.WithMisfireThreshold(d)                    // Stale job recovery threshold (default: 1m)
 scheduler.WithShutdownTimeout(d)                     // Max wait for in-flight jobs on shutdown (default: 30s)
 scheduler.WithCleanupTimeout(d)                      // Max wait for post-execution DB cleanup (default: 5s)
+scheduler.WithOnError(func(jobID string, err error))  // Callback on job execution failure
 ```
 
 ### Triggers
@@ -244,7 +245,7 @@ scheduler.WithCleanupTimeout(d)                      // Max wait for post-execut
 trigger, err := scheduler.NewCronTrigger("0 0 */6 * * *")
 
 // Fixed interval
-trigger := scheduler.NewIntervalTrigger(30 * time.Second)
+trigger, err := scheduler.NewIntervalTrigger(30 * time.Second)
 
 // Fire once at a specific time
 trigger := scheduler.NewOnceTrigger(time.Now().Add(5 * time.Minute))

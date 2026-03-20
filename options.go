@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"database/sql"
-	"log/slog"
 	"time"
 
 	"github.com/ishinvin/scheduler/dialect"
@@ -29,7 +28,7 @@ func WithJDBC(db *sql.DB, dialectName, tablePrefix string) Option {
 		case "oracle":
 			d = jdbc.Oracle{}
 		default:
-			slog.Warn("unknown dialect, falling back to postgres", "dialect", dialectName)
+			sc.logError("unknown dialect, falling back to postgres", "dialect", dialectName)
 			d = jdbc.Postgres{}
 		}
 		sc.store = jdbc.NewJDBC(db, d, tablePrefix)

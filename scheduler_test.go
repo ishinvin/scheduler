@@ -382,6 +382,29 @@ func TestNewIntervalTriggerNegativeReturnsError(t *testing.T) {
 	}
 }
 
+func TestRegisterNilFnAndNilTrigger(t *testing.T) {
+	s := newTestScheduler(t, context.Background())
+	err := s.Register(scheduler.Job{ID: "empty-job"})
+	if !errors.Is(err, scheduler.ErrEmptyJob) {
+		t.Fatalf("expected ErrEmptyJob, got %v", err)
+	}
+}
+
+func TestRescheduleNoStore(t *testing.T) {
+	s, err := scheduler.New(context.Background())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = s.Reschedule(scheduler.Job{
+		ID:      "no-store",
+		Trigger: mustInterval(t, time.Second),
+		Fn:      func(_ context.Context) error { return nil },
+	})
+	if err == nil {
+		t.Fatal("expected error for reschedule without store")
+	}
+}
+
 func TestDoubleRunReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

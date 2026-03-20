@@ -103,17 +103,16 @@ func (s *scheduler) Register(job Job) error {
 	if err := validateJob(job); err != nil {
 		return err
 	}
-
-	if job.Fn != nil {
-		s.handlers.Store(job.ID, job.Fn)
-	}
-
-	if job.Trigger == nil {
-		return nil
+	if job.Fn == nil && job.Trigger == nil {
+		return ErrEmptyJob
 	}
 
 	if s.store == nil {
-		return fmt.Errorf("scheduler: no job store configured")
+		return ErrNoStore
+	}
+
+	if job.Fn != nil {
+		s.handlers.Store(job.ID, job.Fn)
 	}
 
 	// Idempotent: skip if the job already exists.
@@ -143,12 +142,16 @@ func (s *scheduler) Reschedule(job Job) error {
 		return err
 	}
 
-	if job.Fn != nil {
-		s.handlers.Store(job.ID, job.Fn)
+	if job.Trigger == nil {
+		return ErrNilTrigger
 	}
 
-	if job.Trigger == nil {
-		return fmt.Errorf("scheduler: reschedule requires a trigger")
+	if s.store == nil {
+		return ErrNoStore
+	}
+
+	if job.Fn != nil {
+		s.handlers.Store(job.ID, job.Fn)
 	}
 
 	now := time.Now()
@@ -214,7 +217,7 @@ func (s *scheduler) Run() error {
 	defer s.running.Unlock()
 
 	if s.store == nil {
-		return fmt.Errorf("scheduler: no job store configured")
+		return ErrNoStore
 	}
 
 	s.logInfo("scheduler starting", "instance", s.instanceID, "poll_interval", s.pollInterval, "misfire_threshold", s.misfireThreshold)
