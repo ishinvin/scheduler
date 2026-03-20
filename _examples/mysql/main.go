@@ -30,10 +30,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Use WithJDBC with a custom MySQL dialect.
-	// This demonstrates how to add support for any database.
 	sched, err := scheduler.New(ctx,
-		scheduler.WithCustomJDBC(db, MySQL{}, ""),
+		scheduler.WithJDBC(db, "mysql", ""),
 		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID("worker-1"),
 	)

@@ -18,7 +18,7 @@ func WithMemoryStore() Option {
 	return func(sc *scheduler) { sc.store = memory.NewMemory() }
 }
 
-// WithJDBC uses a SQL-backed job store with a built-in dialect ("postgres", "oracle").
+// WithJDBC uses a SQL-backed job store with a built-in dialect ("postgres", "oracle", "mysql").
 // Falls back to postgres if the dialect is unknown.
 func WithJDBC(db *sql.DB, dialectName, tablePrefix string) Option {
 	return func(sc *scheduler) {
@@ -28,6 +28,8 @@ func WithJDBC(db *sql.DB, dialectName, tablePrefix string) Option {
 			d = jdbc.Postgres{}
 		case "oracle":
 			d = jdbc.Oracle{}
+		case "mysql":
+			d = jdbc.MySQL{}
 		default:
 			sc.logWarn("unknown dialect, falling back to postgres", "dialect", dialectName)
 			d = jdbc.Postgres{}

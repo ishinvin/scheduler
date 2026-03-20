@@ -1,9 +1,8 @@
-package main
+package jdbc
 
 import "fmt"
 
 // MySQL implements dialect.Dialect for MySQL / MariaDB.
-// This demonstrates how to create a custom dialect for any database.
 type MySQL struct{}
 
 func (MySQL) Placeholder(_ int) string { return "?" }

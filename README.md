@@ -133,26 +133,16 @@ func main() {
 }
 ```
 
-### Custom Dialect (MySQL)
+### Custom Dialect
+
+Implement `dialect.Dialect` and use `WithCustomJDBC`:
 
 ```go
-// Implement dialect.Dialect for your database.
-type MySQL struct{}
-
-func (MySQL) Placeholder(_ int) string { return "?" }
-func (MySQL) DateAddSQL(col, secondsExpr string) string {
-    return fmt.Sprintf("TIMESTAMPADD(SECOND, %s, %s)", secondsExpr, col)
-}
-func (MySQL) SchemaSQL(prefix string) string { /* CREATE TABLE ... */ }
-
-// Use it with WithCustomJDBC:
 sched, _ := scheduler.New(ctx,
-    scheduler.WithCustomJDBC(db, MySQL{}, ""),
+    scheduler.WithCustomJDBC(db, MyDialect{}, ""),
     scheduler.WithInitializeSchema(),
 )
 ```
-
-See [\_examples/mysql/](_examples/mysql/) for a complete example.
 
 ## Architecture
 
@@ -176,6 +166,7 @@ The store is always the source of truth — there is no in-memory scheduling sta
 | Memory     | `WithMemoryStore()`                        |
 | PostgreSQL | `WithJDBC(db, "postgres", tablePrefix)`    |
 | Oracle     | `WithJDBC(db, "oracle", tablePrefix)`      |
+| MySQL      | `WithJDBC(db, "mysql", tablePrefix)`       |
 | Custom     | `WithCustomJDBC(db, dialect, tablePrefix)` |
 
 ### JDBC Store — Acquire Flow
@@ -223,6 +214,7 @@ sched.Run() error
 scheduler.WithMemoryStore()                          // In-memory store (single-instance)
 scheduler.WithJDBC(db, "postgres", "")               // PostgreSQL store
 scheduler.WithJDBC(db, "oracle", "")                 // Oracle store
+scheduler.WithJDBC(db, "mysql", "")                  // MySQL store
 scheduler.WithCustomJDBC(db, dialect, "")            // Custom SQL dialect
 
 // Schema
@@ -261,7 +253,7 @@ See the [\_examples/](_examples/) directory:
 - [\_examples/memory/](_examples/memory/) — single-instance with cron, interval, and once triggers
 - [\_examples/postgres/](_examples/postgres/) — multi-instance with PostgreSQL
 - [\_examples/oracle/](_examples/oracle/) — multi-instance with Oracle
-- [\_examples/mysql/](_examples/mysql/) — custom MySQL dialect example
+- [\_examples/mysql/](_examples/mysql/) — MySQL example
 - [\_examples/multi-instance/](_examples/multi-instance/) — Docker Compose with 3 replicas sharing PostgreSQL
 
 ## License
