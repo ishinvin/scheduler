@@ -50,7 +50,7 @@ func WithInitializeSchema() Option {
 	return func(sc *scheduler) { sc.initSchema = true }
 }
 
-// WithLogger sets a custom slog.Logger. Default is silent (no-op logger).
+// WithLogger sets a custom slog.Logger. Default is slog.Default().
 func WithLogger(logger *slog.Logger) Option {
 	return func(sc *scheduler) { sc.logger = logger }
 }
@@ -76,6 +76,8 @@ func WithShutdownTimeout(d time.Duration) Option {
 	return func(sc *scheduler) {
 		if d > 0 {
 			sc.shutdownTimeout = d
+		} else {
+			sc.logWarn("ignoring non-positive shutdown timeout", "value", d)
 		}
 	}
 }
@@ -85,6 +87,8 @@ func WithCleanupTimeout(d time.Duration) Option {
 	return func(sc *scheduler) {
 		if d > 0 {
 			sc.cleanupTimeout = d
+		} else {
+			sc.logWarn("ignoring non-positive cleanup timeout", "value", d)
 		}
 	}
 }
@@ -99,6 +103,8 @@ func WithPollInterval(d time.Duration) Option {
 	return func(sc *scheduler) {
 		if d > 0 {
 			sc.pollInterval = d
+		} else {
+			sc.logWarn("ignoring non-positive poll interval", "value", d)
 		}
 	}
 }

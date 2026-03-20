@@ -337,14 +337,18 @@ func (s *scheduler) dispatchJob(rec *store.JobRecord) {
 	fn := s.resolveHandler(rec.ID)
 	if fn == nil {
 		s.logWarn("no handler registered for job, releasing", "job", rec.ID)
-		_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
+		if err := s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime); err != nil {
+			s.logError("failed to release job without handler", "job", rec.ID, "error", err)
+		}
 		return
 	}
 
 	trigger, err := triggerFromRecord(rec)
 	if err != nil {
 		s.logError("failed to parse trigger from store", "job", rec.ID, "error", err)
-		_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
+		if releaseErr := s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime); releaseErr != nil {
+			s.logError("failed to release job after trigger parse error", "job", rec.ID, "error", releaseErr)
+		}
 		return
 	}
 

@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS ` + p + `scheduler_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_` + p + `sched_jobs_fire
-    ON ` + p + `scheduler_jobs (next_fire_time)
-    WHERE state = 'WAITING';
+    ON ` + p + `scheduler_jobs (next_fire_time, state);
 `
 }

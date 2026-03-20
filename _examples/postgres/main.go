@@ -41,31 +41,34 @@ func main() {
 
 	// Register jobs. These are persisted to PostgreSQL and survive restarts.
 	// The Fn is stored by job ID so rehydrated jobs can resolve it on restart.
+	cleanupTrigger, _ := scheduler.NewCronTrigger("0 */1 * * * *")
 	sched.Register(scheduler.Job{
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",
-		Trigger: must(scheduler.NewCronTrigger("0 */1 * * * *")), // every 1 minute
-		Timeout: 2 * time.Minute,                               // timeout persists to DB
+		Trigger: cleanupTrigger,
+		Timeout: 2 * time.Minute,
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "running cleanup...")
 			return nil
 		},
 	})
 
+	reportTrigger, _ := scheduler.NewCronTrigger("0 0 9 * * *")
 	sched.Register(scheduler.Job{
 		ID:      "daily-report",
 		Name:    "Daily report",
-		Trigger: must(scheduler.NewCronTrigger("0 0 9 * * *")), // 9 AM daily
+		Trigger: reportTrigger,
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "generating report...")
 			return nil
 		},
 	})
 
+	heartbeatTrigger, _ := scheduler.NewIntervalTrigger(10 * time.Second)
 	sched.Register(scheduler.Job{
 		ID:      "heartbeat",
 		Name:    "Heartbeat",
-		Trigger: must(scheduler.NewIntervalTrigger(10 * time.Second)),
+		Trigger: heartbeatTrigger,
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "heartbeat")
 			return nil
@@ -77,11 +80,4 @@ func main() {
 	if err := sched.Run(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func must[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
 }

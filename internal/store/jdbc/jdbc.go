@@ -91,7 +91,10 @@ func (s *jdbcStore) DeleteJob(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("jdbc store: delete job: %w", err)
 	}
-	n, _ := result.RowsAffected()
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("jdbc store: delete job rows affected: %w", err)
+	}
 	if n == 0 {
 		return store.ErrJobNotFound
 	}

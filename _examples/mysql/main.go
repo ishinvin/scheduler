@@ -40,30 +40,33 @@ func main() {
 	}
 
 	// Register jobs. These are persisted to MySQL and survive restarts.
-	_ = sched.Register(scheduler.Job{
+	cleanupTrigger, _ := scheduler.NewCronTrigger("0 */5 * * * *")
+	sched.Register(scheduler.Job{
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",
-		Trigger: must(scheduler.NewCronTrigger("0 */5 * * * *")),
+		Trigger: cleanupTrigger,
 		Fn: func(_ context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "running cleanup...")
 			return nil
 		},
 	})
 
-	_ = sched.Register(scheduler.Job{
+	reportTrigger, _ := scheduler.NewCronTrigger("0 0 9 * * *")
+	sched.Register(scheduler.Job{
 		ID:      "daily-report",
 		Name:    "Daily report",
-		Trigger: must(scheduler.NewCronTrigger("0 0 9 * * *")),
+		Trigger: reportTrigger,
 		Fn: func(_ context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "generating report...")
 			return nil
 		},
 	})
 
-	_ = sched.Register(scheduler.Job{
+	heartbeatTrigger, _ := scheduler.NewIntervalTrigger(10 * time.Second)
+	sched.Register(scheduler.Job{
 		ID:      "heartbeat",
 		Name:    "Heartbeat",
-		Trigger: must(scheduler.NewIntervalTrigger(10 * time.Second)),
+		Trigger: heartbeatTrigger,
 		Fn: func(_ context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "heartbeat")
 			return nil
@@ -75,11 +78,4 @@ func main() {
 	if err := sched.Run(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func must[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
 }

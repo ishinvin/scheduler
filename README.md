@@ -51,10 +51,11 @@ func main() {
     }
 
     // Register a cron job with a 30s execution timeout
+    cronTrigger, _ := scheduler.NewCronTrigger("0 0 9 * * *")
     sched.Register(scheduler.Job{
         ID:      "daily-report",
         Name:    "Generate daily report",
-        Trigger: must(scheduler.NewCronTrigger("0 0 9 * * *")),
+        Trigger: cronTrigger,
         Timeout: 30 * time.Second,
         Fn: func(ctx context.Context) error {
             fmt.Println("generating report...")
@@ -63,10 +64,11 @@ func main() {
     })
 
     // Register an interval job
+    intervalTrigger, _ := scheduler.NewIntervalTrigger(30 * time.Second)
     sched.Register(scheduler.Job{
         ID:      "health-check",
         Name:    "Health check",
-        Trigger: must(scheduler.NewIntervalTrigger(30 * time.Second)),
+        Trigger: intervalTrigger,
         Fn: func(ctx context.Context) error {
             fmt.Println("checking health...")
             return nil
@@ -75,13 +77,6 @@ func main() {
 
     // Start the scheduler. Blocks until signal.
     log.Fatal(sched.Run())
-}
-
-func must[T any](v T, err error) T {
-    if err != nil {
-        panic(err)
-    }
-    return v
 }
 ```
 
@@ -118,10 +113,11 @@ func main() {
 
     // Register a job. Idempotent — if the job already exists in the store,
     // only the Fn handler is registered (safe for multi-instance restarts).
+    cronTrigger, _ := scheduler.NewCronTrigger("0 */5 * * * *")
     sched.Register(scheduler.Job{
         ID:      "welcome-email",
         Name:    "Send welcome emails",
-        Trigger: must(scheduler.NewCronTrigger("0 */5 * * * *")),
+        Trigger: cronTrigger,
         Fn: func(ctx context.Context) error {
             // send email logic
             return nil

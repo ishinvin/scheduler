@@ -23,10 +23,11 @@ func main() {
 	}
 
 	// Cron trigger: every minute, with a 10s execution timeout.
+	cronTrigger, _ := scheduler.NewCronTrigger("0 * * * * *")
 	sched.Register(scheduler.Job{
 		ID:      "cron-job",
 		Name:    "Every minute",
-		Trigger: must(scheduler.NewCronTrigger("0 * * * * *")),
+		Trigger: cronTrigger,
 		Timeout: 10 * time.Second,
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "cron job fired")
@@ -35,10 +36,11 @@ func main() {
 	})
 
 	// Interval trigger: every 5 seconds.
+	intervalTrigger, _ := scheduler.NewIntervalTrigger(5 * time.Second)
 	sched.Register(scheduler.Job{
 		ID:      "interval-job",
 		Name:    "Every 5s",
-		Trigger: must(scheduler.NewIntervalTrigger(5 * time.Second)),
+		Trigger: intervalTrigger,
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "interval job fired")
 			return nil
@@ -60,7 +62,8 @@ func main() {
 	go func() {
 		time.Sleep(15 * time.Second)
 		fmt.Println("rescheduling interval-job to every 2s...")
-		sched.Reschedule(scheduler.Job{ID: "interval-job", Trigger: must(scheduler.NewIntervalTrigger(2 * time.Second))})
+		newTrigger, _ := scheduler.NewIntervalTrigger(2 * time.Second)
+		sched.Reschedule(scheduler.Job{ID: "interval-job", Trigger: newTrigger})
 	}()
 
 	// Start the scheduler. Blocks until the context is canceled.
@@ -68,11 +71,4 @@ func main() {
 	if err := sched.Run(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func must[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
 }

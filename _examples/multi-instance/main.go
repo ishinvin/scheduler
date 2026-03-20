@@ -47,11 +47,14 @@ func main() {
 
 	// Each replica registers the same jobs.
 	// The first to start persists them; the rest just register their handlers.
+	heartbeatTrigger, _ := scheduler.NewIntervalTrigger(1 * time.Second)
+	cleanupTrigger, _ := scheduler.NewCronTrigger("0 */1 * * * *")
+
 	jobs := []scheduler.Job{
 		{
 			ID:      "heartbeat",
 			Name:    "Heartbeat",
-			Trigger: must(scheduler.NewIntervalTrigger(1 * time.Second)),
+			Trigger: heartbeatTrigger,
 			Fn: func(_ context.Context) error {
 				fmt.Printf("[%s] %s  heartbeat\n", instanceID, time.Now().Format(time.TimeOnly))
 				return nil
@@ -60,7 +63,7 @@ func main() {
 		{
 			ID:      "cleanup",
 			Name:    "Periodic cleanup",
-			Trigger: must(scheduler.NewCronTrigger("0 */1 * * * *")),
+			Trigger: cleanupTrigger,
 			Timeout: 30 * time.Second,
 			Fn: func(_ context.Context) error {
 				fmt.Printf("[%s] %s  cleanup\n", instanceID, time.Now().Format(time.TimeOnly))
@@ -88,11 +91,4 @@ func main() {
 	if err := sched.Run(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func must[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
 }

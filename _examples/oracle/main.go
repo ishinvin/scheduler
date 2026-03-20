@@ -40,20 +40,22 @@ func main() {
 	}
 
 	// Register jobs. These are persisted to Oracle and survive restarts.
+	cleanupTrigger, _ := scheduler.NewCronTrigger("0 */5 * * * *")
 	sched.Register(scheduler.Job{
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",
-		Trigger: must(scheduler.NewCronTrigger("0 */5 * * * *")), // every 5 minutes
+		Trigger: cleanupTrigger,
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "running cleanup...")
 			return nil
 		},
 	})
 
+	reportTrigger, _ := scheduler.NewCronTrigger("0 0 9 * * *")
 	sched.Register(scheduler.Job{
 		ID:      "daily-report",
 		Name:    "Daily report",
-		Trigger: must(scheduler.NewCronTrigger("0 0 9 * * *")), // 9 AM daily
+		Trigger: reportTrigger,
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "generating report...")
 			return nil
@@ -76,11 +78,4 @@ func main() {
 	if err := sched.Run(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func must[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
 }
