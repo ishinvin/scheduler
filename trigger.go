@@ -88,7 +88,11 @@ type IntervalTrigger struct {
 }
 
 // NewIntervalTrigger creates a trigger that fires at the given interval.
+// Panics if every <= 0.
 func NewIntervalTrigger(every time.Duration) *IntervalTrigger {
+	if every <= 0 {
+		panic("scheduler: interval must be positive")
+	}
 	return &IntervalTrigger{Every: every}
 }
 
@@ -105,7 +109,7 @@ func (i *IntervalTrigger) String() string {
 // ---------------------------------------------------------------------------
 
 // jobToRecord converts a Job to a store.JobRecord.
-func jobToRecord(job *Job, nextFire time.Time) *store.JobRecord {
+func jobToRecord(job *Job, nextFire time.Time) (*store.JobRecord, error) {
 	rec := &store.JobRecord{
 		ID:           job.ID,
 		Name:         job.Name,
@@ -124,9 +128,11 @@ func jobToRecord(job *Job, nextFire time.Time) *store.JobRecord {
 	case *IntervalTrigger:
 		rec.TriggerType = TriggerTypeInterval
 		rec.TriggerValue = t.Every.String()
+	default:
+		return nil, fmt.Errorf("%w: %T", ErrUnsupportedTrigger, job.Trigger)
 	}
 
-	return rec
+	return rec, nil
 }
 
 // triggerFromRecord reconstructs a Trigger from a stored JobRecord.

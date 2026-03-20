@@ -328,3 +328,36 @@ func TestRescheduleCreatesIfNotFound(t *testing.T) {
 		t.Fatalf("expected Reschedule to create job, got %v", err)
 	}
 }
+
+func TestRegisterEmptyID(t *testing.T) {
+	s := newTestScheduler(t, context.Background())
+	err := s.Register(scheduler.Job{Name: "no id"})
+	if err == nil {
+		t.Fatal("expected error for empty job ID")
+	}
+}
+
+func TestRegisterNegativeTimeout(t *testing.T) {
+	s := newTestScheduler(t, context.Background())
+	err := s.Register(scheduler.Job{ID: "neg-timeout", Timeout: -time.Second})
+	if err == nil {
+		t.Fatal("expected error for negative timeout")
+	}
+}
+
+func TestRescheduleEmptyID(t *testing.T) {
+	s := newTestScheduler(t, context.Background())
+	err := s.Reschedule(scheduler.Job{Trigger: scheduler.NewIntervalTrigger(time.Second)})
+	if err == nil {
+		t.Fatal("expected error for empty job ID on reschedule")
+	}
+}
+
+func TestNewIntervalTriggerZeroPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for zero interval")
+		}
+	}()
+	scheduler.NewIntervalTrigger(0)
+}

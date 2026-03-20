@@ -87,7 +87,10 @@ func TestJobToRecord_Cron(t *testing.T) {
 		Timeout: 10 * time.Second,
 	}
 
-	rec := jobToRecord(job, nextFire)
+	rec, err := jobToRecord(job, nextFire)
+	if err != nil {
+		t.Fatalf("jobToRecord: %v", err)
+	}
 
 	if rec.ID != "j1" {
 		t.Errorf("ID = %q, want %q", rec.ID, "j1")
@@ -117,7 +120,10 @@ func TestJobToRecord_Once(t *testing.T) {
 		Trigger: NewOnceTrigger(at),
 	}
 
-	rec := jobToRecord(job, at)
+	rec, err := jobToRecord(job, at)
+	if err != nil {
+		t.Fatalf("jobToRecord: %v", err)
+	}
 
 	if rec.TriggerType != TriggerTypeOnce {
 		t.Errorf("TriggerType = %q, want %q", rec.TriggerType, TriggerTypeOnce)
@@ -134,7 +140,10 @@ func TestJobToRecord_Interval(t *testing.T) {
 		Trigger: NewIntervalTrigger(5 * time.Minute),
 	}
 
-	rec := jobToRecord(job, time.Now())
+	rec, err := jobToRecord(job, time.Now())
+	if err != nil {
+		t.Fatalf("jobToRecord: %v", err)
+	}
 
 	if rec.TriggerType != TriggerTypeInterval {
 		t.Errorf("TriggerType = %q, want %q", rec.TriggerType, TriggerTypeInterval)
@@ -211,5 +220,19 @@ func TestTriggerFromRecord_InvalidInterval(t *testing.T) {
 	_, err := triggerFromRecord(rec)
 	if err == nil {
 		t.Fatal("expected error for invalid interval value")
+	}
+}
+
+// customTrigger is a test-only Trigger that is not one of the built-in types.
+type customTrigger struct{}
+
+func (customTrigger) NextFireTime(after time.Time) time.Time { return after.Add(time.Second) }
+func (customTrigger) String() string                         { return "custom" }
+
+func TestJobToRecord_UnsupportedTrigger(t *testing.T) {
+	job := &Job{ID: "j4", Name: "custom", Trigger: customTrigger{}}
+	_, err := jobToRecord(job, time.Now())
+	if !errors.Is(err, ErrUnsupportedTrigger) {
+		t.Fatalf("expected ErrUnsupportedTrigger, got %v", err)
 	}
 }

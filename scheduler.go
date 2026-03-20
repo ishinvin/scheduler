@@ -99,6 +99,10 @@ func New(ctx context.Context, opts ...Option) (Scheduler, error) {
 // Register adds a job to the scheduler and persists it to the store.
 // If Trigger is nil, only the handler is registered (no job is scheduled).
 func (s *scheduler) Register(job Job) error {
+	if err := validateJob(job); err != nil {
+		return err
+	}
+
 	if job.Fn != nil {
 		s.handlers.Store(job.ID, job.Fn)
 	}
@@ -119,7 +123,10 @@ func (s *scheduler) Register(job Job) error {
 	now := time.Now()
 	next := job.Trigger.NextFireTime(now)
 
-	record := jobToRecord(&job, next)
+	record, err := jobToRecord(&job, next)
+	if err != nil {
+		return err
+	}
 	if err := s.store.CreateJob(s.ctx, record); err != nil {
 		return fmt.Errorf("scheduler: register job: %w", err)
 	}
@@ -131,6 +138,10 @@ func (s *scheduler) Register(job Job) error {
 
 // Reschedule creates or updates a job with the given trigger.
 func (s *scheduler) Reschedule(job Job) error {
+	if err := validateJob(job); err != nil {
+		return err
+	}
+
 	if job.Fn != nil {
 		s.handlers.Store(job.ID, job.Fn)
 	}
@@ -141,7 +152,10 @@ func (s *scheduler) Reschedule(job Job) error {
 
 	now := time.Now()
 	next := job.Trigger.NextFireTime(now)
-	record := jobToRecord(&job, next)
+	record, err := jobToRecord(&job, next)
+	if err != nil {
+		return err
+	}
 
 	rec, err := s.store.GetJob(s.ctx, job.ID)
 	if errors.Is(err, store.ErrJobNotFound) {
@@ -422,6 +436,16 @@ func (s *scheduler) nextPollWait() time.Duration {
 	return wait
 }
 
+func validateJob(job Job) error {
+	if job.ID == "" {
+		return ErrEmptyJobID
+	}
+	if job.Timeout < 0 {
+		return ErrNegativeTimeout
+	}
+	return nil
+}
+
 func (s *scheduler) signal() {
 	select {
 	case s.wakeUp <- signal{}:
@@ -435,8 +459,6 @@ func (s *scheduler) logInfo(msg string, keysAndValues ...any) {
 	}
 }
 
-func (s *scheduler) logError(msg string, keysAndValues ...any) {
-	if s.verbose {
-		slog.Error(msg, keysAndValues...)
-	}
+func (*scheduler) logError(msg string, keysAndValues ...any) {
+	slog.Error(msg, keysAndValues...)
 }
