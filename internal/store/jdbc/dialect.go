@@ -1,4 +1,4 @@
-package store
+package jdbc
 
 import (
 	"fmt"
@@ -9,10 +9,9 @@ import (
 
 const jdbcColumns = `job_id, name, trigger_type, trigger_value, timeout_secs, next_fire_time, state, instance_id, acquired_at, enabled, created_at, updated_at` //nolint:lll // column list
 
-// dialectCol returns a column name, uppercased if the dialect requires it.
+// dialectCol returns a column name, uppercased for Oracle.
 func dialectCol(d dialect.Dialect, name string) string {
-	type uppercaser interface{ UppercaseIdentifiers() bool }
-	if u, ok := d.(uppercaser); ok && u.UppercaseIdentifiers() {
+	if _, ok := d.(Oracle); ok {
 		return strings.ToUpper(name)
 	}
 	return name

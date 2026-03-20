@@ -1,4 +1,4 @@
-package store
+package jdbc
 
 import (
 	"fmt"
@@ -10,7 +10,6 @@ type Oracle struct{}
 
 func (Oracle) Placeholder(index int) string { return fmt.Sprintf(":%d", index) }
 func (Oracle) BooleanTrue() string          { return "1" }
-func (Oracle) UppercaseIdentifiers() bool   { return true }
 
 func (Oracle) DateAddSQL(col, secondsExpr string) string {
 	return fmt.Sprintf("%s + NUMTODSINTERVAL(%s, 'SECOND')", col, secondsExpr)

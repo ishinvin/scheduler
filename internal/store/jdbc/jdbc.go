@@ -1,4 +1,4 @@
-package store
+package jdbc
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ishinvin/scheduler/dialect"
+	"github.com/ishinvin/scheduler/internal/store"
 )
 
 // jdbcQueries holds cached SQL strings, built once in NewJDBC.
@@ -26,20 +27,18 @@ type jdbcQueries struct {
 
 // JDBCStore implements JobStore backed by a SQL database.
 type JDBCStore struct {
-	db               *sql.DB
-	dialect          dialect.Dialect
-	tablePrefix      string
-	initializeSchema InitializeSchema
-	q                jdbcQueries
+	db          *sql.DB
+	dialect     dialect.Dialect
+	tablePrefix string
+	q           jdbcQueries
 }
 
 // NewJDBC creates a new JDBC-backed job store.
-func NewJDBC(db *sql.DB, d dialect.Dialect, tablePrefix string, initSchema InitializeSchema) *JDBCStore {
+func NewJDBC(db *sql.DB, d dialect.Dialect, tablePrefix string) store.JobStore {
 	s := &JDBCStore{
-		db:               db,
-		dialect:          d,
-		tablePrefix:      tablePrefix,
-		initializeSchema: initSchema,
+		db:          db,
+		dialect:     d,
+		tablePrefix: tablePrefix,
 	}
 	t := dialectCol(d, s.tablePrefix+"scheduler_jobs")
 	s.q = jdbcQueries{
@@ -56,11 +55,6 @@ func NewJDBC(db *sql.DB, d dialect.Dialect, tablePrefix string, initSchema Initi
 	return s
 }
 
-// SchemaSQL returns the DDL for the store's table.
-func (s *JDBCStore) SchemaSQL() string {
-	return s.dialect.SchemaSQL(s.tablePrefix)
-}
-
 func (s *JDBCStore) CreateSchema(ctx context.Context) error {
 	ddl := s.dialect.SchemaSQL(s.tablePrefix)
 	for _, stmt := range strings.Split(ddl, ";") {
@@ -75,16 +69,16 @@ func (s *JDBCStore) CreateSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *JDBCStore) CreateJob(ctx context.Context, job *JobRecord) error {
+func (s *JDBCStore) CreateJob(ctx context.Context, job *store.JobRecord) error {
 	now := time.Now()
 	timeoutSecs := int64(job.Timeout / time.Second)
-	if _, err := s.db.ExecContext(ctx, s.q.insert, job.ID, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, StateWaiting, "", nil, job.Enabled, now, now); err != nil { //nolint:lll // readable
+	if _, err := s.db.ExecContext(ctx, s.q.insert, job.ID, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, store.StateWaiting, "", nil, job.Enabled, now, now); err != nil { //nolint:lll // readable
 		return fmt.Errorf("jdbc store: create job: %w", err)
 	}
 	return nil
 }
 
-func (s *JDBCStore) UpdateJob(ctx context.Context, job *JobRecord) error {
+func (s *JDBCStore) UpdateJob(ctx context.Context, job *store.JobRecord) error {
 	timeoutSecs := int64(job.Timeout / time.Second)
 	if _, err := s.db.ExecContext(ctx, s.q.update, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, job.Enabled, time.Now(), job.ID); err != nil { //nolint:lll // readable
 		return fmt.Errorf("jdbc store: update job: %w", err)
@@ -99,16 +93,16 @@ func (s *JDBCStore) DeleteJob(ctx context.Context, id string) error {
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
-		return ErrJobNotFound
+		return store.ErrJobNotFound
 	}
 	return nil
 }
 
-func (s *JDBCStore) GetJob(ctx context.Context, id string) (*JobRecord, error) {
+func (s *JDBCStore) GetJob(ctx context.Context, id string) (*store.JobRecord, error) {
 	row := s.db.QueryRowContext(ctx, s.q.get, id)
 	rec, err := s.scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrJobNotFound
+		return nil, store.ErrJobNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("jdbc store: get job: %w", err)
@@ -118,7 +112,7 @@ func (s *JDBCStore) GetJob(ctx context.Context, id string) (*JobRecord, error) {
 
 // AcquireNextJobs uses SELECT FOR UPDATE SKIP LOCKED + UPDATE within a single
 // transaction to atomically find and claim due jobs.
-func (s *JDBCStore) AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*JobRecord, error) {
+func (s *JDBCStore) AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*store.JobRecord, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("jdbc store: get conn: %w", err)
@@ -130,14 +124,14 @@ func (s *JDBCStore) AcquireNextJobs(ctx context.Context, now time.Time, instance
 		return nil, fmt.Errorf("jdbc store: begin tx: %w", err)
 	}
 
-	rows, err := tx.QueryContext(ctx, s.q.listDue, StateWaiting, now)
+	rows, err := tx.QueryContext(ctx, s.q.listDue, store.StateWaiting, now)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("jdbc store: list due jobs: %w", err)
 	}
 	defer rows.Close()
 
-	var dueJobs []*JobRecord
+	var dueJobs []*store.JobRecord
 	for rows.Next() {
 		rec, err := s.scanJob(rows)
 		if err != nil {
@@ -157,16 +151,16 @@ func (s *JDBCStore) AcquireNextJobs(ctx context.Context, now time.Time, instance
 	}
 
 	ts := time.Now()
-	var acquired []*JobRecord
+	var acquired []*store.JobRecord
 	for _, rec := range dueJobs {
-		result, err := tx.ExecContext(ctx, s.q.acquire, StateAcquired, instanceID, ts, ts, rec.ID, StateWaiting)
+		result, err := tx.ExecContext(ctx, s.q.acquire, store.StateAcquired, instanceID, ts, ts, rec.ID, store.StateWaiting)
 		if err != nil {
 			_ = tx.Rollback()
 			return nil, fmt.Errorf("jdbc store: claim job %s: %w", rec.ID, err)
 		}
 		n, _ := result.RowsAffected()
 		if n > 0 {
-			rec.State = StateAcquired
+			rec.State = store.StateAcquired
 			rec.InstanceID = instanceID
 			rec.AcquiredAt = ts
 			acquired = append(acquired, rec)
@@ -180,9 +174,9 @@ func (s *JDBCStore) AcquireNextJobs(ctx context.Context, now time.Time, instance
 }
 
 func (s *JDBCStore) ReleaseJob(ctx context.Context, id string, nextFireTime time.Time) error {
-	state := StateWaiting
+	state := store.StateWaiting
 	if nextFireTime.IsZero() {
-		state = StateComplete
+		state = store.StateComplete
 	}
 	if _, err := s.db.ExecContext(ctx, s.q.release, state, nextFireTime, time.Now(), id); err != nil {
 		return fmt.Errorf("jdbc store: release job: %w", err)
@@ -193,7 +187,7 @@ func (s *JDBCStore) ReleaseJob(ctx context.Context, id string, nextFireTime time
 func (s *JDBCStore) RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error) {
 	now := time.Now()
 	thresholdSecs := int64(threshold / time.Second)
-	result, err := s.db.ExecContext(ctx, s.q.recoverStale, StateWaiting, now, StateAcquired, thresholdSecs, now)
+	result, err := s.db.ExecContext(ctx, s.q.recoverStale, store.StateWaiting, now, store.StateAcquired, thresholdSecs, now)
 	if err != nil {
 		return 0, fmt.Errorf("jdbc store: recover stale jobs: %w", err)
 	}
@@ -203,25 +197,18 @@ func (s *JDBCStore) RecoverStaleJobs(ctx context.Context, threshold time.Duratio
 
 func (s *JDBCStore) NextFireTime(ctx context.Context) (time.Time, error) {
 	var t sql.NullTime
-	if err := s.db.QueryRowContext(ctx, s.q.nextFireTime, StateWaiting).Scan(&t); err != nil {
+	if err := s.db.QueryRowContext(ctx, s.q.nextFireTime, store.StateWaiting).Scan(&t); err != nil {
 		return time.Time{}, fmt.Errorf("jdbc store: next fire time: %w", err)
 	}
 	return t.Time, nil
-}
-
-func (s *JDBCStore) Init(ctx context.Context) error {
-	if s.initializeSchema == InitSchemaAlways {
-		return s.CreateSchema(ctx)
-	}
-	return nil
 }
 
 type scanner interface {
 	Scan(dest ...any) error
 }
 
-func (*JDBCStore) scanJob(sc scanner) (*JobRecord, error) {
-	var rec JobRecord
+func (*JDBCStore) scanJob(sc scanner) (*store.JobRecord, error) {
+	var rec store.JobRecord
 	var timeoutSecs int64
 	var instanceID sql.NullString
 	var acquiredAt sql.NullTime

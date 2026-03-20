@@ -27,10 +27,11 @@ func main() {
 	}
 	defer db.Close()
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	sched, err := scheduler.New(ctx,
-		scheduler.WithOracle(db),
+		scheduler.WithJDBC(db, "oracle", ""),
 		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID("worker-1"),
 	)
@@ -39,7 +40,7 @@ func main() {
 	}
 
 	// Register jobs. These are persisted to Oracle and survive restarts.
-	sched.Register(ctx, scheduler.Job{
+	sched.Register(scheduler.Job{
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",
 		Trigger: must(scheduler.NewCronTrigger("*/5 * * * *")), // every 5 minutes
@@ -49,7 +50,7 @@ func main() {
 		},
 	})
 
-	sched.Register(ctx, scheduler.Job{
+	sched.Register(scheduler.Job{
 		ID:      "daily-report",
 		Name:    "Daily report",
 		Trigger: must(scheduler.NewCronTrigger("0 9 * * *")), // 9 AM daily
@@ -60,7 +61,7 @@ func main() {
 	})
 
 	// Fire-once job: schedule a one-time task.
-	sched.Register(ctx, scheduler.Job{
+	sched.Register(scheduler.Job{
 		ID:      "welcome-task",
 		Name:    "One-time welcome",
 		Trigger: scheduler.NewOnceTrigger(time.Now().Add(30 * time.Second)),
@@ -71,11 +72,8 @@ func main() {
 	})
 
 	// Start the scheduler. Blocks until the context is canceled.
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	fmt.Println("scheduler started (ctrl+c to stop)")
-	if err := sched.Run(ctx); err != nil {
+	if err := sched.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -33,10 +33,11 @@ func main() {
 	}
 	defer db.Close()
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	sched, err := scheduler.New(ctx,
-		scheduler.WithPostgres(db),
+		scheduler.WithJDBC(db, "postgres", ""),
 		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID(instanceID),
 	)
@@ -78,16 +79,13 @@ func main() {
 	}
 
 	for _, job := range jobs {
-		if err := sched.Register(ctx, job); err != nil {
+		if err := sched.Register(job); err != nil {
 			log.Fatalf("register %s: %v", job.ID, err)
 		}
 	}
 
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	fmt.Printf("[%s] scheduler started\n", instanceID)
-	if err := sched.Run(ctx); err != nil {
+	if err := sched.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

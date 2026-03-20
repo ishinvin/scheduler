@@ -13,7 +13,7 @@ A job scheduling library for Go with pluggable job stores and multi-instance sup
 - **Fair job distribution** — `FOR UPDATE SKIP LOCKED` ensures concurrent instances each get disjoint subsets of due jobs
 - **Per-job optimistic locking** — `WHERE state = 'WAITING'` ensures only one instance acquires each job, no separate lock table needed
 - **Crash recovery** — stale jobs stuck in ACQUIRED state are automatically recovered back to WAITING, respecting per-job timeouts
-- **Context-based lifecycle** — `Run(ctx)` blocks until the context is canceled, with graceful shutdown
+- **Context-based lifecycle** — `New(ctx)` accepts the server context; `Run()` blocks until the context is canceled, with graceful shutdown
 
 ## Installation
 
@@ -40,7 +40,8 @@ import (
 )
 
 func main() {
-    ctx := context.Background()
+    ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer stop()
 
     sched, err := scheduler.New(ctx,
         scheduler.WithMemoryStore(),
@@ -50,11 +51,11 @@ func main() {
     }
 
     // Register a cron job with a 30s execution timeout
-    sched.Register(ctx, scheduler.Job{
+    sched.Register(scheduler.Job{
         ID:      "daily-report",
         Name:    "Generate daily report",
         Trigger: must(scheduler.NewCronTrigger("0 9 * * *")),
-        Timeout: 30 * time.Second, // cancel if execution exceeds 30s
+        Timeout: 30 * time.Second,
         Fn: func(ctx context.Context) error {
             fmt.Println("generating report...")
             return nil
@@ -62,7 +63,7 @@ func main() {
     })
 
     // Register an interval job
-    sched.Register(ctx, scheduler.Job{
+    sched.Register(scheduler.Job{
         ID:      "health-check",
         Name:    "Health check",
         Trigger: scheduler.NewIntervalTrigger(30 * time.Second),
@@ -73,9 +74,7 @@ func main() {
     })
 
     // Start the scheduler. Blocks until signal.
-    ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-    defer stop()
-    log.Fatal(sched.Run(ctx))
+    log.Fatal(sched.Run())
 }
 
 func must[T any](v T, err error) T {
@@ -105,11 +104,12 @@ import (
 func main() {
     db, _ := sql.Open("postgres", "postgres://localhost/mydb?sslmode=disable")
 
-    ctx := context.Background()
+    ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer stop()
 
     sched, err := scheduler.New(ctx,
-        scheduler.WithPostgres(db),
-        scheduler.WithInitializeSchema(), // auto-create tables
+        scheduler.WithJDBC(db, "postgres", ""),
+        scheduler.WithInitializeSchema(),
         scheduler.WithInstanceID("worker-1"),
     )
     if err != nil {
@@ -118,7 +118,7 @@ func main() {
 
     // Register a job. Idempotent — if the job already exists in the store,
     // only the Fn handler is registered (safe for multi-instance restarts).
-    sched.Register(ctx, scheduler.Job{
+    sched.Register(scheduler.Job{
         ID:      "welcome-email",
         Name:    "Send welcome emails",
         Trigger: must(scheduler.NewCronTrigger("*/5 * * * *")),
@@ -129,16 +129,14 @@ func main() {
     })
 
     // Start the scheduler. Blocks until signal.
-    ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-    defer stop()
-    log.Fatal(sched.Run(ctx))
+    log.Fatal(sched.Run())
 }
 ```
 
 ### Custom Dialect (MySQL)
 
 ```go
-// Implement scheduler.Dialect for your database.
+// Implement dialect.Dialect for your database.
 type MySQL struct{}
 
 func (MySQL) Placeholder(_ int) string { return "?" }
@@ -148,9 +146,9 @@ func (MySQL) DateAddSQL(col, secondsExpr string) string {
 }
 func (MySQL) SchemaSQL(prefix string) string { /* CREATE TABLE ... */ }
 
-// Use it with WithJDBC:
+// Use it with WithCustomJDBC:
 sched, _ := scheduler.New(ctx,
-    scheduler.WithJDBC(db, MySQL{}),
+    scheduler.WithCustomJDBC(db, MySQL{}, ""),
     scheduler.WithInitializeSchema(),
 )
 ```
@@ -174,12 +172,12 @@ The store is always the source of truth — there is no in-memory scheduling sta
 
 ### Supported Databases
 
-| Database   | Option                                |
-| ---------- | ------------------------------------- |
-| Memory     | `WithMemoryStore()`                   |
-| PostgreSQL | `WithPostgres(db)`                    |
-| Oracle     | `WithOracle(db)`                      |
-| Custom     | `WithJDBC(db, dialect)` — implement `scheduler.Dialect` |
+| Database   | Option                                           |
+| ---------- | ------------------------------------------------ |
+| Memory     | `WithMemoryStore()`                              |
+| PostgreSQL | `WithJDBC(db, "postgres", tablePrefix)`          |
+| Oracle     | `WithJDBC(db, "oracle", tablePrefix)`            |
+| Custom     | `WithCustomJDBC(db, dialect, tablePrefix)`       |
 
 ### JDBC Store — Acquire Flow
 
@@ -204,39 +202,40 @@ COMMIT
 sched, err := scheduler.New(ctx, opts ...Option)
 
 // Register a new job (idempotent — safe for multi-instance restarts)
-sched.Register(ctx, job Job) error
+sched.Register(job Job) error
 
 // Create or update a job with a new trigger
-sched.Reschedule(ctx, job Job) error
+sched.Reschedule(job Job) error
+
+// Check if a job exists
+sched.Exists(id string) (bool, error)
 
 // Remove a job
-sched.Delete(ctx, id JobID) error
+sched.Delete(id string) error
 
-// Run the scheduler (blocks until ctx is canceled)
-sched.Run(ctx context.Context) error
+// Run the scheduler (blocks until the context is canceled)
+sched.Run() error
 ```
 
 ### Options
 
 ```go
 // Store options (pick one)
-scheduler.WithMemoryStore()             // In-memory store (single-instance)
-scheduler.WithPostgres(db)              // PostgreSQL store
-scheduler.WithOracle(db)                // Oracle store
-scheduler.WithJDBC(db, dialect)         // Custom SQL dialect
+scheduler.WithMemoryStore()                          // In-memory store (single-instance)
+scheduler.WithJDBC(db, "postgres", "")               // PostgreSQL store
+scheduler.WithJDBC(db, "oracle", "")                 // Oracle store
+scheduler.WithCustomJDBC(db, dialect, "")            // Custom SQL dialect
 
-// JDBC store options
-scheduler.WithInitializeSchema()        // Auto-create tables on startup
-scheduler.WithTablePrefix("myapp_")     // Table name prefix
+// Schema
+scheduler.WithInitializeSchema()                     // Auto-create tables on startup
 
 // Scheduler options
-scheduler.WithVerbose()                 // Enable logging via slog (default: silent)
-scheduler.WithLocation(loc)             // Set timezone (default: UTC)
-scheduler.WithInstanceID(id)            // Set instance ID (default: hostname)
-scheduler.WithPollInterval(d)           // Safety fallback poll interval (default: 15s)
-scheduler.WithMisfireThreshold(d)       // Stale job recovery threshold (default: 1m)
-scheduler.WithShutdownTimeout(d)        // Max wait for in-flight jobs on shutdown (default: 30s)
-scheduler.WithCleanupTimeout(d)         // Max wait for post-execution DB cleanup (default: 5s)
+scheduler.WithVerbose()                              // Enable logging via slog (default: silent)
+scheduler.WithInstanceID(id)                         // Set instance ID (default: hostname-pid)
+scheduler.WithPollInterval(d)                        // Safety fallback poll interval (default: 15s)
+scheduler.WithMisfireThreshold(d)                    // Stale job recovery threshold (default: 1m)
+scheduler.WithShutdownTimeout(d)                     // Max wait for in-flight jobs on shutdown (default: 30s)
+scheduler.WithCleanupTimeout(d)                      // Max wait for post-execution DB cleanup (default: 5s)
 ```
 
 ### Triggers
@@ -266,27 +265,30 @@ See the [\_examples/](_examples/) directory:
 
 ```
 scheduler/
-├── scheduler.go        # Scheduler core, run loop
-├── job.go              # JobID, Job
-├── trigger.go          # CronTrigger, OnceTrigger, IntervalTrigger
-├── dialect.go          # Dialect interface (public, for custom databases)
-├── options.go          # Functional options
-├── errors.go           # Sentinel errors
-├── scheduler_test.go   # Tests
+├── scheduler.go          # Scheduler core, run loop
+├── job.go                # Job struct
+├── trigger.go            # CronTrigger, OnceTrigger, IntervalTrigger
+├── options.go            # Functional options
+├── errors.go             # Sentinel errors
+├── scheduler_test.go     # Tests
+├── dialect/
+│   └── dialect.go        # Dialect interface (public, for custom databases)
 ├── internal/
 │   └── store/
-│       ├── types.go    # JobStore, JobRecord, JobState (internal)
-│       ├── dialect.go  # SQL query builders
-│       ├── postgres.go # PostgreSQL dialect
-│       ├── oracle.go   # Oracle dialect
-│       ├── memory.go   # In-memory store
-│       └── jdbc.go     # SQL-backed store
+│       ├── store.go      # JobStore interface, JobRecord, JobState
+│       ├── memory/
+│       │   └── memory.go # In-memory store
+│       └── jdbc/
+│           ├── jdbc.go     # SQL-backed store
+│           ├── dialect.go  # SQL query builders
+│           ├── postgres.go # PostgreSQL dialect
+│           └── oracle.go   # Oracle dialect
 └── _examples/
-    ├── memory/         # In-memory example
-    ├── postgres/       # PostgreSQL multi-instance example
-    ├── oracle/         # Oracle multi-instance example
-    ├── mysql/          # MySQL custom dialect example
-    └── multi-instance/ # Docker Compose multi-replica example
+    ├── memory/           # In-memory example
+    ├── postgres/         # PostgreSQL example
+    ├── oracle/           # Oracle example
+    ├── mysql/            # MySQL custom dialect example
+    └── multi-instance/   # Docker Compose multi-replica example
 ```
 
 ## License

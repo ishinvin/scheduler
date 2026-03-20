@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ishinvin/scheduler/dialect"
 	"github.com/ishinvin/scheduler/internal/store"
 )
 
@@ -28,19 +26,19 @@ type signal = struct{}
 type Scheduler interface {
 	// Register adds a job to the scheduler and persists it to the store.
 	// If Trigger is nil, only the handler is registered (no job is scheduled).
-	Register(ctx context.Context, job Job) error
+	Register(job Job) error
 
 	// Reschedule creates or updates a job with the given trigger.
-	Reschedule(ctx context.Context, job Job) error
+	Reschedule(job Job) error
 
 	// Exists checks whether a job with the given ID exists in the store.
-	Exists(ctx context.Context, id string) (bool, error)
+	Exists(id string) (bool, error)
 
 	// Delete removes a job from the scheduler and the job store.
-	Delete(ctx context.Context, id string) error
+	Delete(id string) error
 
-	// Run starts the scheduling loop. Blocks until ctx is canceled.
-	Run(ctx context.Context) error
+	// Run starts the scheduling loop. Blocks until the context is canceled.
+	Run() error
 }
 
 // scheduler is the concrete implementation of Scheduler.
@@ -48,18 +46,12 @@ type scheduler struct {
 	handlers         sync.Map // job ID -> func(ctx context.Context) error
 	store            store.JobStore
 	verbose          bool
-	location         *time.Location
 	instanceID       string
 	misfireThreshold time.Duration
 	pollInterval     time.Duration
 	shutdownTimeout  time.Duration
 	cleanupTimeout   time.Duration
-
-	// JDBC store config (used in New to build the store).
-	storeDB      *sql.DB
-	storeDialect dialect.Dialect
-	tablePrefix  string
-	initSchema   store.InitializeSchema
+	initSchema       bool
 
 	ctx    context.Context
 	wakeUp chan signal
@@ -69,31 +61,26 @@ type scheduler struct {
 // New creates a new Scheduler.
 func New(ctx context.Context, opts ...Option) (Scheduler, error) {
 	s := &scheduler{
-		verbose:          false,
-		location:         time.UTC,
+		ctx:              ctx,
 		misfireThreshold: defaultMisfireThreshold,
 		pollInterval:     defaultPollInterval,
 		shutdownTimeout:  defaultShutdownTimeout,
 		cleanupTimeout:   defaultCleanupTimeout,
 		wakeUp:           make(chan signal, 1),
+		verbose:          false,
+		initSchema:       false,
 	}
 
 	hostname, _ := os.Hostname()
-	s.instanceID = hostname
+	s.instanceID = fmt.Sprintf("%s-%d", hostname, os.Getpid())
 
 	for _, o := range opts {
 		o(s)
 	}
 
-	// Build JDBC store from config if no store was set directly.
-	if s.store == nil && s.storeDB != nil && s.storeDialect != nil {
-		s.store = store.NewJDBC(s.storeDB, s.storeDialect, s.tablePrefix, s.initSchema)
-	}
-
-	// Initialize the store if it supports it.
-	if init, ok := s.store.(store.JobStoreInitializer); ok {
-		if err := init.Init(ctx); err != nil {
-			return nil, fmt.Errorf("scheduler: store init: %w", err)
+	if s.initSchema && s.store != nil {
+		if err := s.store.CreateSchema(s.ctx); err != nil {
+			return nil, fmt.Errorf("scheduler: create schema: %w", err)
 		}
 	}
 
@@ -102,7 +89,7 @@ func New(ctx context.Context, opts ...Option) (Scheduler, error) {
 
 // Register adds a job to the scheduler and persists it to the store.
 // If Trigger is nil, only the handler is registered (no job is scheduled).
-func (s *scheduler) Register(ctx context.Context, job Job) error {
+func (s *scheduler) Register(job Job) error {
 	if job.Fn != nil {
 		s.handlers.Store(job.ID, job.Fn)
 	}
@@ -116,15 +103,15 @@ func (s *scheduler) Register(ctx context.Context, job Job) error {
 	}
 
 	// Idempotent: skip if the job already exists.
-	if _, err := s.store.GetJob(ctx, job.ID); !errors.Is(err, store.ErrJobNotFound) {
+	if _, err := s.store.GetJob(s.ctx, job.ID); !errors.Is(err, store.ErrJobNotFound) {
 		return err
 	}
 
-	now := time.Now().In(s.location)
+	now := time.Now()
 	next := job.Trigger.NextFireTime(now)
 
 	record := jobToRecord(&job, next)
-	if err := s.store.CreateJob(ctx, record); err != nil {
+	if err := s.store.CreateJob(s.ctx, record); err != nil {
 		return fmt.Errorf("scheduler: register job: %w", err)
 	}
 
@@ -134,7 +121,7 @@ func (s *scheduler) Register(ctx context.Context, job Job) error {
 }
 
 // Reschedule creates or updates a job with the given trigger.
-func (s *scheduler) Reschedule(ctx context.Context, job Job) error {
+func (s *scheduler) Reschedule(job Job) error {
 	if job.Fn != nil {
 		s.handlers.Store(job.ID, job.Fn)
 	}
@@ -143,13 +130,13 @@ func (s *scheduler) Reschedule(ctx context.Context, job Job) error {
 		return fmt.Errorf("scheduler: reschedule requires a trigger")
 	}
 
-	now := time.Now().In(s.location)
+	now := time.Now()
 	next := job.Trigger.NextFireTime(now)
 	record := jobToRecord(&job, next)
 
-	rec, err := s.store.GetJob(ctx, job.ID)
+	rec, err := s.store.GetJob(s.ctx, job.ID)
 	if errors.Is(err, store.ErrJobNotFound) {
-		if err := s.store.CreateJob(ctx, record); err != nil {
+		if err := s.store.CreateJob(s.ctx, record); err != nil {
 			return fmt.Errorf("scheduler: reschedule job: %w", err)
 		}
 	} else if err != nil {
@@ -159,7 +146,7 @@ func (s *scheduler) Reschedule(ctx context.Context, job Job) error {
 		record.State = rec.State
 		record.InstanceID = rec.InstanceID
 		record.AcquiredAt = rec.AcquiredAt
-		if err := s.store.UpdateJob(ctx, record); err != nil {
+		if err := s.store.UpdateJob(s.ctx, record); err != nil {
 			return fmt.Errorf("scheduler: reschedule job: %w", err)
 		}
 	}
@@ -170,8 +157,8 @@ func (s *scheduler) Reschedule(ctx context.Context, job Job) error {
 }
 
 // Exists checks whether a job with the given ID exists in the store.
-func (s *scheduler) Exists(ctx context.Context, id string) (bool, error) {
-	_, err := s.store.GetJob(ctx, id)
+func (s *scheduler) Exists(id string) (bool, error) {
+	_, err := s.store.GetJob(s.ctx, id)
 	if errors.Is(err, store.ErrJobNotFound) {
 		return false, nil
 	}
@@ -182,8 +169,8 @@ func (s *scheduler) Exists(ctx context.Context, id string) (bool, error) {
 }
 
 // Delete removes a job from the scheduler and the job store.
-func (s *scheduler) Delete(ctx context.Context, id string) error {
-	if err := s.store.DeleteJob(ctx, id); err != nil {
+func (s *scheduler) Delete(id string) error {
+	if err := s.store.DeleteJob(s.ctx, id); err != nil {
 		if errors.Is(err, store.ErrJobNotFound) {
 			return ErrJobNotFound
 		}
@@ -195,13 +182,12 @@ func (s *scheduler) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Run starts the scheduling loop. Blocks until ctx is canceled.
-func (s *scheduler) Run(ctx context.Context) error {
+// Run starts the scheduling loop. Blocks until the context is canceled.
+func (s *scheduler) Run() error {
 	if s.store == nil {
 		return fmt.Errorf("scheduler: no job store configured")
 	}
 
-	s.ctx = ctx
 	s.logInfo("scheduler starting", "instance", s.instanceID, "poll_interval", s.pollInterval, "misfire_threshold", s.misfireThreshold)
 
 	// Stale job recovery ticker.
@@ -220,7 +206,7 @@ func (s *scheduler) Run(ctx context.Context) error {
 	}()
 
 	for {
-		now := time.Now().In(s.location)
+		now := time.Now()
 
 		records, err := s.store.AcquireNextJobs(s.ctx, now, s.instanceID)
 		if err != nil {
@@ -367,7 +353,7 @@ func (s *scheduler) executeJob(job Job) {
 
 	err := job.Fn(execCtx)
 
-	nextFire := job.Trigger.NextFireTime(time.Now().In(s.location))
+	nextFire := job.Trigger.NextFireTime(time.Now())
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), s.cleanupTimeout)
 	defer cleanupCancel()
 

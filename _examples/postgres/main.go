@@ -27,10 +27,11 @@ func main() {
 	}
 	defer db.Close()
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	sched, err := scheduler.New(ctx,
-		scheduler.WithPostgres(db),
+		scheduler.WithJDBC(db, "postgres", ""),
 		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID("worker-1"),
 	)
@@ -40,7 +41,7 @@ func main() {
 
 	// Register jobs. These are persisted to PostgreSQL and survive restarts.
 	// The Fn is stored by job ID so rehydrated jobs can resolve it on restart.
-	sched.Register(ctx, scheduler.Job{
+	sched.Register(scheduler.Job{
 		ID:      "cleanup-job",
 		Name:    "Periodic cleanup",
 		Trigger: must(scheduler.NewCronTrigger("*/1 * * * *")), // every 1 minute
@@ -51,7 +52,7 @@ func main() {
 		},
 	})
 
-	sched.Register(ctx, scheduler.Job{
+	sched.Register(scheduler.Job{
 		ID:      "daily-report",
 		Name:    "Daily report",
 		Trigger: must(scheduler.NewCronTrigger("0 9 * * *")), // 9 AM daily
@@ -61,7 +62,7 @@ func main() {
 		},
 	})
 
-	sched.Register(ctx, scheduler.Job{
+	sched.Register(scheduler.Job{
 		ID:      "heartbeat",
 		Name:    "Heartbeat",
 		Trigger: scheduler.NewIntervalTrigger(10 * time.Second),
@@ -72,11 +73,8 @@ func main() {
 	})
 
 	// Start the scheduler. Blocks until the context is canceled.
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	fmt.Println("scheduler started (ctrl+c to stop)")
-	if err := sched.Run(ctx); err != nil {
+	if err := sched.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

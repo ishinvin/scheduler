@@ -1,25 +1,29 @@
-package store
+package memory
 
 import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/ishinvin/scheduler/internal/store"
 )
 
 // MemoryStore is an in-memory JobStore implementation.
 type MemoryStore struct {
 	mu   sync.RWMutex
-	jobs map[string]*JobRecord
+	jobs map[string]*store.JobRecord
 }
 
 // NewMemory creates a new in-memory job store.
-func NewMemory() *MemoryStore {
+func NewMemory() store.JobStore {
 	return &MemoryStore{
-		jobs: make(map[string]*JobRecord),
+		jobs: make(map[string]*store.JobRecord),
 	}
 }
 
-func (s *MemoryStore) CreateJob(_ context.Context, job *JobRecord) error {
+func (*MemoryStore) CreateSchema(_ context.Context) error { return nil }
+
+func (s *MemoryStore) CreateJob(_ context.Context, job *store.JobRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -32,13 +36,13 @@ func (s *MemoryStore) CreateJob(_ context.Context, job *JobRecord) error {
 	return nil
 }
 
-func (s *MemoryStore) UpdateJob(_ context.Context, job *JobRecord) error {
+func (s *MemoryStore) UpdateJob(_ context.Context, job *store.JobRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	existing, ok := s.jobs[job.ID]
 	if !ok {
-		return ErrJobNotFound
+		return store.ErrJobNotFound
 	}
 
 	job.CreatedAt = existing.CreatedAt
@@ -53,34 +57,34 @@ func (s *MemoryStore) DeleteJob(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.jobs[id]; !ok {
-		return ErrJobNotFound
+		return store.ErrJobNotFound
 	}
 	delete(s.jobs, id)
 	return nil
 }
 
-func (s *MemoryStore) GetJob(_ context.Context, id string) (*JobRecord, error) {
+func (s *MemoryStore) GetJob(_ context.Context, id string) (*store.JobRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	job, ok := s.jobs[id]
 	if !ok {
-		return nil, ErrJobNotFound
+		return nil, store.ErrJobNotFound
 	}
 	cp := *job
 	return &cp, nil
 }
 
 // AcquireNextJobs finds due jobs and marks them ACQUIRED.
-func (s *MemoryStore) AcquireNextJobs(_ context.Context, now time.Time, instanceID string) ([]*JobRecord, error) {
+func (s *MemoryStore) AcquireNextJobs(_ context.Context, now time.Time, instanceID string) ([]*store.JobRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var result []*JobRecord
+	var result []*store.JobRecord
 	ts := time.Now()
 	for _, job := range s.jobs {
-		if job.State != StateWaiting || !job.Enabled || job.NextFireTime.IsZero() || job.NextFireTime.After(now) {
+		if job.State != store.StateWaiting || !job.Enabled || job.NextFireTime.IsZero() || job.NextFireTime.After(now) {
 			continue
 		}
-		job.State = StateAcquired
+		job.State = store.StateAcquired
 		job.InstanceID = instanceID
 		job.AcquiredAt = ts
 		job.UpdatedAt = ts
@@ -96,12 +100,12 @@ func (s *MemoryStore) ReleaseJob(_ context.Context, id string, nextFireTime time
 	defer s.mu.Unlock()
 	job, ok := s.jobs[id]
 	if !ok {
-		return ErrJobNotFound
+		return store.ErrJobNotFound
 	}
 	if nextFireTime.IsZero() {
-		job.State = StateComplete
+		job.State = store.StateComplete
 	} else {
-		job.State = StateWaiting
+		job.State = store.StateWaiting
 	}
 	job.InstanceID = ""
 	job.AcquiredAt = time.Time{}
@@ -118,7 +122,7 @@ func (s *MemoryStore) RecoverStaleJobs(_ context.Context, threshold time.Duratio
 	now := time.Now()
 	recovered := 0
 	for _, job := range s.jobs {
-		if job.State != StateAcquired || job.AcquiredAt.IsZero() {
+		if job.State != store.StateAcquired || job.AcquiredAt.IsZero() {
 			continue
 		}
 		staleAfter := threshold
@@ -128,7 +132,7 @@ func (s *MemoryStore) RecoverStaleJobs(_ context.Context, threshold time.Duratio
 		if !job.AcquiredAt.Before(now.Add(-staleAfter)) {
 			continue
 		}
-		job.State = StateWaiting
+		job.State = store.StateWaiting
 		job.InstanceID = ""
 		job.AcquiredAt = time.Time{}
 		job.UpdatedAt = now
@@ -142,7 +146,7 @@ func (s *MemoryStore) NextFireTime(_ context.Context) (time.Time, error) {
 	defer s.mu.RUnlock()
 	var earliest time.Time
 	for _, job := range s.jobs {
-		if job.State != StateWaiting || !job.Enabled || job.NextFireTime.IsZero() {
+		if job.State != store.StateWaiting || !job.Enabled || job.NextFireTime.IsZero() {
 			continue
 		}
 		if earliest.IsZero() || job.NextFireTime.Before(earliest) {
