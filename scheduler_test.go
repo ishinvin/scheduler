@@ -2,12 +2,23 @@ package scheduler_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ishinvin/scheduler"
 )
+
+// mustInterval is a test helper that creates an IntervalTrigger or fails.
+func mustInterval(t *testing.T, d time.Duration) *scheduler.IntervalTrigger {
+	t.Helper()
+	tr, err := scheduler.NewIntervalTrigger(d)
+	if err != nil {
+		t.Fatalf("NewIntervalTrigger: %v", err)
+	}
+	return tr
+}
 
 func newTestScheduler(t *testing.T, ctx context.Context) scheduler.Scheduler {
 	t.Helper()
@@ -30,7 +41,7 @@ func TestRegisterAndExecute(t *testing.T) {
 	job := scheduler.Job{
 		ID:      "test-1",
 		Name:    "interval job",
-		Trigger: scheduler.NewIntervalTrigger(50 * time.Millisecond),
+		Trigger: mustInterval(t, 50*time.Millisecond),
 		Fn: func(_ context.Context) error {
 			count.Add(1)
 			return nil
@@ -65,7 +76,7 @@ func TestReschedule(t *testing.T) {
 	job := scheduler.Job{
 		ID:      "resched-1",
 		Name:    "slow job",
-		Trigger: scheduler.NewIntervalTrigger(1 * time.Hour),
+		Trigger: mustInterval(t, 1*time.Hour),
 		Fn: func(_ context.Context) error {
 			count.Add(1)
 			return nil
@@ -77,7 +88,7 @@ func TestReschedule(t *testing.T) {
 	}
 
 	// Reschedule to fire fast.
-	err := s.Reschedule(scheduler.Job{ID: "resched-1", Trigger: scheduler.NewIntervalTrigger(50 * time.Millisecond)})
+	err := s.Reschedule(scheduler.Job{ID: "resched-1", Trigger: mustInterval(t, 50*time.Millisecond)})
 	if err != nil {
 		t.Fatalf("Reschedule: %v", err)
 	}
@@ -101,7 +112,7 @@ func TestDelete(t *testing.T) {
 	job := scheduler.Job{
 		ID:      "delete-1",
 		Name:    "deletable",
-		Trigger: scheduler.NewIntervalTrigger(50 * time.Millisecond),
+		Trigger: mustInterval(t, 50*time.Millisecond),
 		Fn: func(_ context.Context) error {
 			count.Add(1)
 			return nil
@@ -176,7 +187,7 @@ func TestHandlerRegistry(t *testing.T) {
 	job := scheduler.Job{
 		ID:      "handler-1",
 		Name:    "handler test",
-		Trigger: scheduler.NewIntervalTrigger(50 * time.Millisecond),
+		Trigger: mustInterval(t, 50*time.Millisecond),
 		Fn: func(_ context.Context) error {
 			count.Add(1)
 			return nil
@@ -205,7 +216,10 @@ func TestCronTriggerInvalid(t *testing.T) {
 }
 
 func TestIntervalTrigger(t *testing.T) {
-	trigger := scheduler.NewIntervalTrigger(5 * time.Second)
+	trigger, err := scheduler.NewIntervalTrigger(5 * time.Second)
+	if err != nil {
+		t.Fatalf("NewIntervalTrigger: %v", err)
+	}
 	now := time.Now()
 	next := trigger.NextFireTime(now)
 	if !next.Equal(now.Add(5 * time.Second)) {
@@ -229,7 +243,7 @@ func TestRecoverStaleJobs(t *testing.T) {
 	job := scheduler.Job{
 		ID:      "stale-1",
 		Name:    "stale test",
-		Trigger: scheduler.NewIntervalTrigger(50 * time.Millisecond),
+		Trigger: mustInterval(t, 50*time.Millisecond),
 		Fn: func(_ context.Context) error {
 			count.Add(1)
 			return nil
@@ -301,7 +315,7 @@ func TestMultiInstanceIntervalDistribution(t *testing.T) {
 	if err := s.Register(scheduler.Job{
 		ID:      "interval-shared",
 		Name:    "shared interval job",
-		Trigger: scheduler.NewIntervalTrigger(50 * time.Millisecond),
+		Trigger: mustInterval(t, 50*time.Millisecond),
 		Fn: func(_ context.Context) error {
 			count.Add(1)
 			return nil
@@ -323,7 +337,7 @@ func TestMultiInstanceIntervalDistribution(t *testing.T) {
 
 func TestRescheduleCreatesIfNotFound(t *testing.T) {
 	s := newTestScheduler(t, context.Background())
-	err := s.Reschedule(scheduler.Job{ID: "new-job", Name: "new", Trigger: scheduler.NewIntervalTrigger(time.Second)})
+	err := s.Reschedule(scheduler.Job{ID: "new-job", Name: "new", Trigger: mustInterval(t, time.Second)})
 	if err != nil {
 		t.Fatalf("expected Reschedule to create job, got %v", err)
 	}
@@ -347,17 +361,78 @@ func TestRegisterNegativeTimeout(t *testing.T) {
 
 func TestRescheduleEmptyID(t *testing.T) {
 	s := newTestScheduler(t, context.Background())
-	err := s.Reschedule(scheduler.Job{Trigger: scheduler.NewIntervalTrigger(time.Second)})
+	tr, _ := scheduler.NewIntervalTrigger(time.Second)
+	err := s.Reschedule(scheduler.Job{Trigger: tr})
 	if err == nil {
 		t.Fatal("expected error for empty job ID on reschedule")
 	}
 }
 
-func TestNewIntervalTriggerZeroPanics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic for zero interval")
-		}
-	}()
-	scheduler.NewIntervalTrigger(0)
+func TestNewIntervalTriggerZeroReturnsError(t *testing.T) {
+	_, err := scheduler.NewIntervalTrigger(0)
+	if !errors.Is(err, scheduler.ErrNonPositiveInterval) {
+		t.Fatalf("expected ErrNonPositiveInterval, got %v", err)
+	}
+}
+
+func TestNewIntervalTriggerNegativeReturnsError(t *testing.T) {
+	_, err := scheduler.NewIntervalTrigger(-time.Second)
+	if !errors.Is(err, scheduler.ErrNonPositiveInterval) {
+		t.Fatalf("expected ErrNonPositiveInterval, got %v", err)
+	}
+}
+
+func TestDoubleRunReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := newTestScheduler(t, ctx)
+
+	go func() { _ = s.Run() }()
+	time.Sleep(25 * time.Millisecond) // let Run() acquire the lock
+
+	err := s.Run()
+	if !errors.Is(err, scheduler.ErrAlreadyRunning) {
+		t.Fatalf("expected ErrAlreadyRunning, got %v", err)
+	}
+}
+
+func TestOnErrorCallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var capturedID string
+	var capturedErr atomic.Value
+
+	s, err := scheduler.New(ctx,
+		scheduler.WithMemoryStore(),
+		scheduler.WithPollInterval(25*time.Millisecond),
+		scheduler.WithOnError(func(jobID string, jobErr error) {
+			capturedID = jobID
+			capturedErr.Store(jobErr)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	jobErr := errors.New("test error")
+	if err := s.Register(scheduler.Job{
+		ID:      "err-job",
+		Name:    "failing job",
+		Trigger: mustInterval(t, 50*time.Millisecond),
+		Fn:      func(_ context.Context) error { return jobErr },
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	go func() { _ = s.Run() }()
+
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	if capturedID != "err-job" {
+		t.Fatalf("expected capturedID = %q, got %q", "err-job", capturedID)
+	}
+	if v := capturedErr.Load(); v == nil {
+		t.Fatal("expected onError to have been called")
+	}
 }

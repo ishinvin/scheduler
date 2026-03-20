@@ -65,7 +65,7 @@ func main() {
 	_ = sched.Register(scheduler.Job{
 		ID:      "heartbeat",
 		Name:    "Heartbeat",
-		Trigger: scheduler.NewIntervalTrigger(10 * time.Second),
+		Trigger: must(scheduler.NewIntervalTrigger(10 * time.Second)),
 		Fn: func(_ context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "heartbeat")
 			return nil

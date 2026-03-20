@@ -51,7 +51,7 @@ func main() {
 		{
 			ID:      "heartbeat",
 			Name:    "Heartbeat",
-			Trigger: scheduler.NewIntervalTrigger(1 * time.Second),
+			Trigger: must(scheduler.NewIntervalTrigger(1 * time.Second)),
 			Fn: func(_ context.Context) error {
 				fmt.Printf("[%s] %s  heartbeat\n", instanceID, time.Now().Format(time.TimeOnly))
 				return nil

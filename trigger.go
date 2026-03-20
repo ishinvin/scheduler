@@ -88,12 +88,12 @@ type IntervalTrigger struct {
 }
 
 // NewIntervalTrigger creates a trigger that fires at the given interval.
-// Panics if every <= 0.
-func NewIntervalTrigger(every time.Duration) *IntervalTrigger {
+// Returns an error if every <= 0.
+func NewIntervalTrigger(every time.Duration) (*IntervalTrigger, error) {
 	if every <= 0 {
-		panic("scheduler: interval must be positive")
+		return nil, ErrNonPositiveInterval
 	}
-	return &IntervalTrigger{Every: every}
+	return &IntervalTrigger{Every: every}, nil
 }
 
 func (i *IntervalTrigger) NextFireTime(after time.Time) time.Time {
@@ -151,7 +151,7 @@ func triggerFromRecord(rec *store.JobRecord) (Trigger, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid interval trigger: %w", err)
 		}
-		return NewIntervalTrigger(d), nil
+		return NewIntervalTrigger(d)
 	default:
 		return nil, fmt.Errorf("unknown trigger type: %s", rec.TriggerType)
 	}

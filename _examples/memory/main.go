@@ -38,7 +38,7 @@ func main() {
 	sched.Register(scheduler.Job{
 		ID:      "interval-job",
 		Name:    "Every 5s",
-		Trigger: scheduler.NewIntervalTrigger(5 * time.Second),
+		Trigger: must(scheduler.NewIntervalTrigger(5 * time.Second)),
 		Fn: func(ctx context.Context) error {
 			fmt.Println(time.Now().Format(time.RFC3339), "interval job fired")
 			return nil
@@ -60,7 +60,7 @@ func main() {
 	go func() {
 		time.Sleep(15 * time.Second)
 		fmt.Println("rescheduling interval-job to every 2s...")
-		sched.Reschedule(scheduler.Job{ID: "interval-job", Trigger: scheduler.NewIntervalTrigger(2 * time.Second)})
+		sched.Reschedule(scheduler.Job{ID: "interval-job", Trigger: must(scheduler.NewIntervalTrigger(2 * time.Second))})
 	}()
 
 	// Start the scheduler. Blocks until the context is canceled.

@@ -63,7 +63,10 @@ func TestOnceTrigger(t *testing.T) {
 }
 
 func TestIntervalTrigger(t *testing.T) {
-	trigger := NewIntervalTrigger(30 * time.Second)
+	trigger, err := NewIntervalTrigger(30 * time.Second)
+	if err != nil {
+		t.Fatalf("NewIntervalTrigger: %v", err)
+	}
 
 	ref := time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC)
 	next := trigger.NextFireTime(ref)
@@ -134,10 +137,11 @@ func TestJobToRecord_Once(t *testing.T) {
 }
 
 func TestJobToRecord_Interval(t *testing.T) {
+	trigger, _ := NewIntervalTrigger(5 * time.Minute)
 	job := &Job{
 		ID:      "j3",
 		Name:    "interval job",
-		Trigger: NewIntervalTrigger(5 * time.Minute),
+		Trigger: trigger,
 	}
 
 	rec, err := jobToRecord(job, time.Now())

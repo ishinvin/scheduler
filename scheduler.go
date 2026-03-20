@@ -61,10 +61,11 @@ type scheduler struct {
 	shutdownTimeout  time.Duration
 	cleanupTimeout   time.Duration
 	initSchema       bool
-
-	ctx    context.Context
-	wakeUp chan signal
-	wg     sync.WaitGroup
+	onError          func(jobID string, err error)
+	ctx              context.Context
+	wakeUp           chan signal
+	wg               sync.WaitGroup
+	running          sync.Mutex
 }
 
 // New creates a new Scheduler.
@@ -207,6 +208,11 @@ func (s *scheduler) Delete(id string) error {
 
 // Run starts the scheduling loop. Blocks until the context is canceled.
 func (s *scheduler) Run() error {
+	if !s.running.TryLock() {
+		return ErrAlreadyRunning
+	}
+	defer s.running.Unlock()
+
 	if s.store == nil {
 		return fmt.Errorf("scheduler: no job store configured")
 	}
@@ -389,6 +395,9 @@ func (s *scheduler) executeJob(job Job) {
 
 	if err != nil {
 		s.logError("job execution failed", "job", job.ID, "error", err)
+		if s.onError != nil {
+			s.onError(job.ID, err)
+		}
 	}
 }
 

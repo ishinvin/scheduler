@@ -2,7 +2,7 @@ package scheduler
 
 import (
 	"database/sql"
-	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ishinvin/scheduler/dialect"
@@ -19,6 +19,7 @@ func WithMemoryStore() Option {
 }
 
 // WithJDBC uses a SQL-backed job store with a built-in dialect ("postgres", "oracle").
+// Falls back to postgres if the dialect is unknown.
 func WithJDBC(db *sql.DB, dialectName, tablePrefix string) Option {
 	return func(sc *scheduler) {
 		var d dialect.Dialect
@@ -28,7 +29,8 @@ func WithJDBC(db *sql.DB, dialectName, tablePrefix string) Option {
 		case "oracle":
 			d = jdbc.Oracle{}
 		default:
-			panic(fmt.Sprintf("scheduler: unknown dialect %q", dialectName))
+			slog.Warn("unknown dialect, falling back to postgres", "dialect", dialectName)
+			d = jdbc.Postgres{}
 		}
 		sc.store = jdbc.NewJDBC(db, d, tablePrefix)
 	}
@@ -78,6 +80,11 @@ func WithCleanupTimeout(d time.Duration) Option {
 			sc.cleanupTimeout = d
 		}
 	}
+}
+
+// WithOnError sets a callback invoked when a job execution returns an error.
+func WithOnError(fn func(jobID string, err error)) Option {
+	return func(sc *scheduler) { sc.onError = fn }
 }
 
 // WithPollInterval sets the maximum time between store polls. Default 15s.
