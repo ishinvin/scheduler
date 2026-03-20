@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -49,8 +48,7 @@ func (c *CronTrigger) String() string {
 
 // OnceTrigger fires exactly once at a specific time.
 type OnceTrigger struct {
-	At   time.Time
-	done atomic.Bool
+	At time.Time
 }
 
 // NewOnceTrigger creates a trigger that fires once at the given time.
@@ -59,14 +57,10 @@ func NewOnceTrigger(at time.Time) *OnceTrigger {
 }
 
 func (o *OnceTrigger) NextFireTime(after time.Time) time.Time {
-	if o.done.Load() || !o.At.After(after) {
+	if !o.At.After(after) {
 		return time.Time{}
 	}
 	return o.At
-}
-
-func (o *OnceTrigger) MarkDone() {
-	o.done.Store(true)
 }
 
 func (o *OnceTrigger) String() string {

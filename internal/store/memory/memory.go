@@ -8,22 +8,22 @@ import (
 	"github.com/ishinvin/scheduler/internal/store"
 )
 
-// MemoryStore is an in-memory JobStore implementation.
-type MemoryStore struct {
+// memoryStore is an in-memory JobStore implementation.
+type memoryStore struct {
 	mu   sync.RWMutex
 	jobs map[string]*store.JobRecord
 }
 
 // NewMemory creates a new in-memory job store.
 func NewMemory() store.JobStore {
-	return &MemoryStore{
+	return &memoryStore{
 		jobs: make(map[string]*store.JobRecord),
 	}
 }
 
-func (*MemoryStore) CreateSchema(_ context.Context) error { return nil }
+func (*memoryStore) CreateSchema(_ context.Context) error { return nil }
 
-func (s *MemoryStore) CreateJob(_ context.Context, job *store.JobRecord) error {
+func (s *memoryStore) CreateJob(_ context.Context, job *store.JobRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -36,7 +36,7 @@ func (s *MemoryStore) CreateJob(_ context.Context, job *store.JobRecord) error {
 	return nil
 }
 
-func (s *MemoryStore) UpdateJob(_ context.Context, job *store.JobRecord) error {
+func (s *memoryStore) UpdateJob(_ context.Context, job *store.JobRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -53,7 +53,7 @@ func (s *MemoryStore) UpdateJob(_ context.Context, job *store.JobRecord) error {
 	return nil
 }
 
-func (s *MemoryStore) DeleteJob(_ context.Context, id string) error {
+func (s *memoryStore) DeleteJob(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.jobs[id]; !ok {
@@ -63,7 +63,7 @@ func (s *MemoryStore) DeleteJob(_ context.Context, id string) error {
 	return nil
 }
 
-func (s *MemoryStore) GetJob(_ context.Context, id string) (*store.JobRecord, error) {
+func (s *memoryStore) GetJob(_ context.Context, id string) (*store.JobRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	job, ok := s.jobs[id]
@@ -75,7 +75,7 @@ func (s *MemoryStore) GetJob(_ context.Context, id string) (*store.JobRecord, er
 }
 
 // AcquireNextJobs finds due jobs and marks them ACQUIRED.
-func (s *MemoryStore) AcquireNextJobs(_ context.Context, now time.Time, instanceID string) ([]*store.JobRecord, error) {
+func (s *memoryStore) AcquireNextJobs(_ context.Context, now time.Time, instanceID string) ([]*store.JobRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var result []*store.JobRecord
@@ -95,7 +95,7 @@ func (s *MemoryStore) AcquireNextJobs(_ context.Context, now time.Time, instance
 }
 
 // ReleaseJob transitions a job back to WAITING, or COMPLETE if nextFireTime is zero.
-func (s *MemoryStore) ReleaseJob(_ context.Context, id string, nextFireTime time.Time) error {
+func (s *memoryStore) ReleaseJob(_ context.Context, id string, nextFireTime time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job, ok := s.jobs[id]
@@ -115,7 +115,7 @@ func (s *MemoryStore) ReleaseJob(_ context.Context, id string, nextFireTime time
 }
 
 // RecoverStaleJobs resets jobs stuck in ACQUIRED longer than the threshold.
-func (s *MemoryStore) RecoverStaleJobs(_ context.Context, threshold time.Duration) (int, error) {
+func (s *memoryStore) RecoverStaleJobs(_ context.Context, threshold time.Duration) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -141,7 +141,7 @@ func (s *MemoryStore) RecoverStaleJobs(_ context.Context, threshold time.Duratio
 	return recovered, nil
 }
 
-func (s *MemoryStore) NextFireTime(_ context.Context) (time.Time, error) {
+func (s *memoryStore) NextFireTime(_ context.Context) (time.Time, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var earliest time.Time

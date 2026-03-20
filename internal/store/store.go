@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// ErrJobNotFound is returned when a job is not found in the store.
+var ErrJobNotFound = errors.New("scheduler: job not found")
+
 // JobState represents the lifecycle state of a job.
 type JobState string
 
@@ -15,9 +18,6 @@ const (
 	StateAcquired JobState = "ACQUIRED"
 	StateComplete JobState = "COMPLETE"
 )
-
-// ErrJobNotFound is returned when a job is not found in the store.
-var ErrJobNotFound = errors.New("scheduler: job not found")
 
 // JobRecord is the serializable representation of a job in the store.
 type JobRecord struct {

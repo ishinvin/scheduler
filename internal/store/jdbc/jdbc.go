@@ -25,8 +25,8 @@ type jdbcQueries struct {
 	recoverStale string
 }
 
-// JDBCStore implements JobStore backed by a SQL database.
-type JDBCStore struct {
+// jdbcStore implements JobStore backed by a SQL database.
+type jdbcStore struct {
 	db          *sql.DB
 	dialect     dialect.Dialect
 	tablePrefix string
@@ -35,7 +35,7 @@ type JDBCStore struct {
 
 // NewJDBC creates a new JDBC-backed job store.
 func NewJDBC(db *sql.DB, d dialect.Dialect, tablePrefix string) store.JobStore {
-	s := &JDBCStore{
+	s := &jdbcStore{
 		db:          db,
 		dialect:     d,
 		tablePrefix: tablePrefix,
@@ -55,7 +55,7 @@ func NewJDBC(db *sql.DB, d dialect.Dialect, tablePrefix string) store.JobStore {
 	return s
 }
 
-func (s *JDBCStore) CreateSchema(ctx context.Context) error {
+func (s *jdbcStore) CreateSchema(ctx context.Context) error {
 	ddl := s.dialect.SchemaSQL(s.tablePrefix)
 	for _, stmt := range strings.Split(ddl, ";") {
 		stmt = strings.TrimSpace(stmt)
@@ -69,7 +69,7 @@ func (s *JDBCStore) CreateSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *JDBCStore) CreateJob(ctx context.Context, job *store.JobRecord) error {
+func (s *jdbcStore) CreateJob(ctx context.Context, job *store.JobRecord) error {
 	now := time.Now()
 	timeoutSecs := int64(job.Timeout / time.Second)
 	if _, err := s.db.ExecContext(ctx, s.q.insert, job.ID, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, store.StateWaiting, "", nil, now, now); err != nil { //nolint:lll // readable
@@ -78,7 +78,7 @@ func (s *JDBCStore) CreateJob(ctx context.Context, job *store.JobRecord) error {
 	return nil
 }
 
-func (s *JDBCStore) UpdateJob(ctx context.Context, job *store.JobRecord) error {
+func (s *jdbcStore) UpdateJob(ctx context.Context, job *store.JobRecord) error {
 	timeoutSecs := int64(job.Timeout / time.Second)
 	if _, err := s.db.ExecContext(ctx, s.q.update, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, time.Now(), job.ID); err != nil { //nolint:lll // readable
 		return fmt.Errorf("jdbc store: update job: %w", err)
@@ -86,7 +86,7 @@ func (s *JDBCStore) UpdateJob(ctx context.Context, job *store.JobRecord) error {
 	return nil
 }
 
-func (s *JDBCStore) DeleteJob(ctx context.Context, id string) error {
+func (s *jdbcStore) DeleteJob(ctx context.Context, id string) error {
 	result, err := s.db.ExecContext(ctx, s.q.delete, id)
 	if err != nil {
 		return fmt.Errorf("jdbc store: delete job: %w", err)
@@ -98,7 +98,7 @@ func (s *JDBCStore) DeleteJob(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *JDBCStore) GetJob(ctx context.Context, id string) (*store.JobRecord, error) {
+func (s *jdbcStore) GetJob(ctx context.Context, id string) (*store.JobRecord, error) {
 	row := s.db.QueryRowContext(ctx, s.q.get, id)
 	rec, err := s.scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -112,7 +112,7 @@ func (s *JDBCStore) GetJob(ctx context.Context, id string) (*store.JobRecord, er
 
 // AcquireNextJobs uses SELECT FOR UPDATE SKIP LOCKED + UPDATE within a single
 // transaction to atomically find and claim due jobs.
-func (s *JDBCStore) AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*store.JobRecord, error) {
+func (s *jdbcStore) AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*store.JobRecord, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("jdbc store: get conn: %w", err)
@@ -173,7 +173,7 @@ func (s *JDBCStore) AcquireNextJobs(ctx context.Context, now time.Time, instance
 	return acquired, nil
 }
 
-func (s *JDBCStore) ReleaseJob(ctx context.Context, id string, nextFireTime time.Time) error {
+func (s *jdbcStore) ReleaseJob(ctx context.Context, id string, nextFireTime time.Time) error {
 	state := store.StateWaiting
 	if nextFireTime.IsZero() {
 		state = store.StateComplete
@@ -184,7 +184,7 @@ func (s *JDBCStore) ReleaseJob(ctx context.Context, id string, nextFireTime time
 	return nil
 }
 
-func (s *JDBCStore) RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error) {
+func (s *jdbcStore) RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error) {
 	now := time.Now()
 	thresholdSecs := int64(threshold / time.Second)
 	result, err := s.db.ExecContext(ctx, s.q.recoverStale, store.StateWaiting, now, store.StateAcquired, thresholdSecs, now)
@@ -195,7 +195,7 @@ func (s *JDBCStore) RecoverStaleJobs(ctx context.Context, threshold time.Duratio
 	return int(n), nil
 }
 
-func (s *JDBCStore) NextFireTime(ctx context.Context) (time.Time, error) {
+func (s *jdbcStore) NextFireTime(ctx context.Context) (time.Time, error) {
 	var t sql.NullTime
 	if err := s.db.QueryRowContext(ctx, s.q.nextFireTime, store.StateWaiting).Scan(&t); err != nil {
 		return time.Time{}, fmt.Errorf("jdbc store: next fire time: %w", err)
@@ -207,7 +207,7 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-func (*JDBCStore) scanJob(sc scanner) (*store.JobRecord, error) {
+func (*jdbcStore) scanJob(sc scanner) (*store.JobRecord, error) {
 	var rec store.JobRecord
 	var timeoutSecs int64
 	var instanceID sql.NullString
