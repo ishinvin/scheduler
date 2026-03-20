@@ -81,7 +81,7 @@ func (s *MemoryStore) AcquireNextJobs(_ context.Context, now time.Time, instance
 	var result []*store.JobRecord
 	ts := time.Now()
 	for _, job := range s.jobs {
-		if job.State != store.StateWaiting || !job.Enabled || job.NextFireTime.IsZero() || job.NextFireTime.After(now) {
+		if job.State != store.StateWaiting || job.NextFireTime.IsZero() || job.NextFireTime.After(now) {
 			continue
 		}
 		job.State = store.StateAcquired
@@ -146,7 +146,7 @@ func (s *MemoryStore) NextFireTime(_ context.Context) (time.Time, error) {
 	defer s.mu.RUnlock()
 	var earliest time.Time
 	for _, job := range s.jobs {
-		if job.State != store.StateWaiting || !job.Enabled || job.NextFireTime.IsZero() {
+		if job.State != store.StateWaiting || job.NextFireTime.IsZero() {
 			continue
 		}
 		if earliest.IsZero() || job.NextFireTime.Before(earliest) {

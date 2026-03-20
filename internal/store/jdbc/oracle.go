@@ -9,8 +9,6 @@ import (
 type Oracle struct{}
 
 func (Oracle) Placeholder(index int) string { return fmt.Sprintf(":%d", index) }
-func (Oracle) BooleanTrue() string          { return "1" }
-
 func (Oracle) DateAddSQL(col, secondsExpr string) string {
 	return fmt.Sprintf("%s + NUMTODSINTERVAL(%s, 'SECOND')", col, secondsExpr)
 }
@@ -28,12 +26,11 @@ CREATE TABLE ` + p + `SCHEDULER_JOBS (
     STATE          VARCHAR2(32)  DEFAULT 'WAITING' NOT NULL,
     INSTANCE_ID    VARCHAR2(256),
     ACQUIRED_AT    TIMESTAMP WITH TIME ZONE,
-    ENABLED        NUMBER(1)     DEFAULT 1 NOT NULL,
     CREATED_AT     TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     UPDATED_AT     TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
 );
 
 CREATE INDEX IDX_` + p + `SCHED_JOBS_FIRE
-    ON ` + p + `SCHEDULER_JOBS (NEXT_FIRE_TIME, STATE, ENABLED);
+    ON ` + p + `SCHEDULER_JOBS (NEXT_FIRE_TIME, STATE);
 `
 }

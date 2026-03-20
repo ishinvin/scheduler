@@ -28,7 +28,6 @@ type JobRecord struct {
 	TriggerValue string // cron expr, RFC3339 time, or duration string
 	State        JobState
 	Timeout      time.Duration // per-execution timeout; 0 = no timeout
-	Enabled      bool
 	AcquiredAt   time.Time
 	NextFireTime time.Time
 	CreatedAt    time.Time
@@ -61,6 +60,6 @@ type JobStore interface {
 	// RecoverStaleJobs resets jobs stuck in ACQUIRED longer than the threshold.
 	RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error)
 
-	// NextFireTime returns the earliest next_fire_time among WAITING enabled jobs.
+	// NextFireTime returns the earliest next_fire_time among WAITING jobs.
 	NextFireTime(ctx context.Context) (time.Time, error)
 }

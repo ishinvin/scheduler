@@ -140,7 +140,6 @@ func main() {
 type MySQL struct{}
 
 func (MySQL) Placeholder(_ int) string { return "?" }
-func (MySQL) BooleanTrue() string      { return "1" }
 func (MySQL) DateAddSQL(col, secondsExpr string) string {
     return fmt.Sprintf("TIMESTAMPADD(SECOND, %s, %s)", secondsExpr, col)
 }
@@ -184,7 +183,7 @@ The store is always the source of truth — there is no in-memory scheduling sta
 ```
 BEGIN tx
   SELECT ... FROM scheduler_jobs
-    WHERE state = 'WAITING' AND enabled AND next_fire_time <= now
+    WHERE state = 'WAITING' AND next_fire_time <= now
     FOR UPDATE SKIP LOCKED
   UPDATE scheduler_jobs SET state = 'ACQUIRED' ...
     WHERE job_id = ? AND state = 'WAITING'  (per job)

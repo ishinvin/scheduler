@@ -40,7 +40,7 @@ func NewJDBC(db *sql.DB, d dialect.Dialect, tablePrefix string) store.JobStore {
 		dialect:     d,
 		tablePrefix: tablePrefix,
 	}
-	t := dialectCol(d, s.tablePrefix+"scheduler_jobs")
+	t := col(d, s.tablePrefix+"scheduler_jobs")
 	s.q = jdbcQueries{
 		insert:       insertJobSQL(d, t),
 		update:       updateJobSQL(d, t),
@@ -72,7 +72,7 @@ func (s *JDBCStore) CreateSchema(ctx context.Context) error {
 func (s *JDBCStore) CreateJob(ctx context.Context, job *store.JobRecord) error {
 	now := time.Now()
 	timeoutSecs := int64(job.Timeout / time.Second)
-	if _, err := s.db.ExecContext(ctx, s.q.insert, job.ID, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, store.StateWaiting, "", nil, job.Enabled, now, now); err != nil { //nolint:lll // readable
+	if _, err := s.db.ExecContext(ctx, s.q.insert, job.ID, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, store.StateWaiting, "", nil, now, now); err != nil { //nolint:lll // readable
 		return fmt.Errorf("jdbc store: create job: %w", err)
 	}
 	return nil
@@ -80,7 +80,7 @@ func (s *JDBCStore) CreateJob(ctx context.Context, job *store.JobRecord) error {
 
 func (s *JDBCStore) UpdateJob(ctx context.Context, job *store.JobRecord) error {
 	timeoutSecs := int64(job.Timeout / time.Second)
-	if _, err := s.db.ExecContext(ctx, s.q.update, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, job.Enabled, time.Now(), job.ID); err != nil { //nolint:lll // readable
+	if _, err := s.db.ExecContext(ctx, s.q.update, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, time.Now(), job.ID); err != nil { //nolint:lll // readable
 		return fmt.Errorf("jdbc store: update job: %w", err)
 	}
 	return nil
@@ -212,7 +212,7 @@ func (*JDBCStore) scanJob(sc scanner) (*store.JobRecord, error) {
 	var timeoutSecs int64
 	var instanceID sql.NullString
 	var acquiredAt sql.NullTime
-	if err := sc.Scan(&rec.ID, &rec.Name, &rec.TriggerType, &rec.TriggerValue, &timeoutSecs, &rec.NextFireTime, &rec.State, &instanceID, &acquiredAt, &rec.Enabled, &rec.CreatedAt, &rec.UpdatedAt); err != nil { //nolint:lll // column list
+	if err := sc.Scan(&rec.ID, &rec.Name, &rec.TriggerType, &rec.TriggerValue, &timeoutSecs, &rec.NextFireTime, &rec.State, &instanceID, &acquiredAt, &rec.CreatedAt, &rec.UpdatedAt); err != nil { //nolint:lll // column list
 		return nil, err
 	}
 	rec.Timeout = time.Duration(timeoutSecs) * time.Second

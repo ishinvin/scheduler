@@ -428,7 +428,6 @@ func jobToRecord(job *Job, nextFire time.Time) *store.JobRecord {
 		Timeout:      job.Timeout,
 		NextFireTime: nextFire,
 		State:        store.StateWaiting,
-		Enabled:      true,
 	}
 
 	switch t := job.Trigger.(type) {

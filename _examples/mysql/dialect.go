@@ -7,8 +7,6 @@ import "fmt"
 type MySQL struct{}
 
 func (MySQL) Placeholder(_ int) string { return "?" }
-func (MySQL) BooleanTrue() string      { return "1" }
-
 func (MySQL) DateAddSQL(col, secondsExpr string) string {
 	return fmt.Sprintf("TIMESTAMPADD(SECOND, %s, %s)", secondsExpr, col)
 }
@@ -26,10 +24,9 @@ CREATE TABLE IF NOT EXISTS ` + p + `scheduler_jobs (
     state          VARCHAR(32)  NOT NULL DEFAULT 'WAITING',
     instance_id    VARCHAR(255),
     acquired_at    DATETIME(6),
-    enabled        TINYINT(1)   NOT NULL DEFAULT 1,
     created_at     DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at     DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    INDEX idx_` + p + `sched_jobs_fire (next_fire_time, state, enabled)
+    INDEX idx_` + p + `sched_jobs_fire (next_fire_time, state)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 `
 }
