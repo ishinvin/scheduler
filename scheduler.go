@@ -54,6 +54,7 @@ type Job struct {
 type scheduler struct {
 	handlers         sync.Map // job ID -> func(ctx context.Context) error
 	store            store.JobStore
+	logger           *slog.Logger
 	verbose          bool
 	instanceID       string
 	misfireThreshold time.Duration
@@ -72,13 +73,12 @@ type scheduler struct {
 func New(ctx context.Context, opts ...Option) (Scheduler, error) {
 	s := &scheduler{
 		ctx:              ctx,
+		logger:           slog.Default(),
 		misfireThreshold: defaultMisfireThreshold,
 		pollInterval:     defaultPollInterval,
 		shutdownTimeout:  defaultShutdownTimeout,
 		cleanupTimeout:   defaultCleanupTimeout,
 		wakeUp:           make(chan signal, 1),
-		verbose:          false,
-		initSchema:       false,
 	}
 
 	hostname, _ := os.Hostname()
@@ -107,12 +107,16 @@ func (s *scheduler) Register(job Job) error {
 		return ErrEmptyJob
 	}
 
-	if s.store == nil {
-		return ErrNoStore
-	}
-
 	if job.Fn != nil {
 		s.handlers.Store(job.ID, job.Fn)
+	}
+
+	if job.Trigger == nil {
+		return nil
+	}
+
+	if s.store == nil {
+		return ErrNoStore
 	}
 
 	// Idempotent: skip if the job already exists.
@@ -185,6 +189,9 @@ func (s *scheduler) Reschedule(job Job) error {
 
 // Exists checks whether a job with the given ID exists in the store.
 func (s *scheduler) Exists(id string) (bool, error) {
+	if s.store == nil {
+		return false, ErrNoStore
+	}
 	_, err := s.store.GetJob(s.ctx, id)
 	if errors.Is(err, store.ErrJobNotFound) {
 		return false, nil
@@ -197,6 +204,9 @@ func (s *scheduler) Exists(id string) (bool, error) {
 
 // Delete removes a job from the scheduler and the job store.
 func (s *scheduler) Delete(id string) error {
+	if s.store == nil {
+		return ErrNoStore
+	}
 	if err := s.store.DeleteJob(s.ctx, id); err != nil {
 		if errors.Is(err, store.ErrJobNotFound) {
 			return ErrJobNotFound
@@ -326,6 +336,7 @@ func (s *scheduler) waitUntil(d time.Duration, recoveryC <-chan time.Time) (inte
 func (s *scheduler) dispatchJob(rec *store.JobRecord) {
 	fn := s.resolveHandler(rec.ID)
 	if fn == nil {
+		s.logWarn("no handler registered for job, releasing", "job", rec.ID)
 		_ = s.store.ReleaseJob(s.ctx, rec.ID, rec.NextFireTime)
 		return
 	}
@@ -467,10 +478,14 @@ func (s *scheduler) signal() {
 
 func (s *scheduler) logInfo(msg string, keysAndValues ...any) {
 	if s.verbose {
-		slog.Info(msg, keysAndValues...)
+		s.logger.Info(msg, keysAndValues...)
 	}
 }
 
-func (*scheduler) logError(msg string, keysAndValues ...any) {
-	slog.Error(msg, keysAndValues...)
+func (s *scheduler) logWarn(msg string, keysAndValues ...any) {
+	s.logger.Warn(msg, keysAndValues...)
+}
+
+func (s *scheduler) logError(msg string, keysAndValues ...any) {
+	s.logger.Error(msg, keysAndValues...)
 }

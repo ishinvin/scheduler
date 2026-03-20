@@ -228,14 +228,17 @@ scheduler.WithCustomJDBC(db, dialect, "")            // Custom SQL dialect
 // Schema
 scheduler.WithInitializeSchema()                     // Auto-create tables on startup
 
+// Logging
+scheduler.WithLogger(logger)                         // Custom *slog.Logger (default: slog.Default())
+scheduler.WithVerbose()                              // Enable info-level logs (default: warn/error only)
+
 // Scheduler options
-scheduler.WithVerbose()                              // Enable logging via slog (default: silent)
 scheduler.WithInstanceID(id)                         // Set instance ID (default: hostname-pid)
 scheduler.WithPollInterval(d)                        // Safety fallback poll interval (default: 15s)
 scheduler.WithMisfireThreshold(d)                    // Stale job recovery threshold (default: 1m)
 scheduler.WithShutdownTimeout(d)                     // Max wait for in-flight jobs on shutdown (default: 30s)
 scheduler.WithCleanupTimeout(d)                      // Max wait for post-execution DB cleanup (default: 5s)
-scheduler.WithOnError(func(jobID string, err error))  // Callback on job execution failure
+scheduler.WithOnError(func(jobID string, err error)) // Callback on job execution failure
 ```
 
 ### Triggers

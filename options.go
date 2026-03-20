@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"database/sql"
+	"log/slog"
 	"time"
 
 	"github.com/ishinvin/scheduler/dialect"
@@ -28,7 +29,7 @@ func WithJDBC(db *sql.DB, dialectName, tablePrefix string) Option {
 		case "oracle":
 			d = jdbc.Oracle{}
 		default:
-			sc.logError("unknown dialect, falling back to postgres", "dialect", dialectName)
+			sc.logWarn("unknown dialect, falling back to postgres", "dialect", dialectName)
 			d = jdbc.Postgres{}
 		}
 		sc.store = jdbc.NewJDBC(db, d, tablePrefix)
@@ -47,7 +48,12 @@ func WithInitializeSchema() Option {
 	return func(sc *scheduler) { sc.initSchema = true }
 }
 
-// WithVerbose enables logging via slog. Default is silent.
+// WithLogger sets a custom slog.Logger. Default is silent (no-op logger).
+func WithLogger(logger *slog.Logger) Option {
+	return func(sc *scheduler) { sc.logger = logger }
+}
+
+// WithVerbose enables info-level logging. Default only logs warn/error.
 func WithVerbose() Option {
 	return func(sc *scheduler) { sc.verbose = true }
 }

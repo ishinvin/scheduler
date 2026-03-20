@@ -459,3 +459,60 @@ func TestOnErrorCallback(t *testing.T) {
 		t.Fatal("expected onError to have been called")
 	}
 }
+
+func TestExists(t *testing.T) {
+	s := newTestScheduler(t, context.Background())
+
+	if err := s.Register(scheduler.Job{
+		ID:      "exists-1",
+		Name:    "test",
+		Trigger: mustInterval(t, time.Second),
+		Fn:      func(_ context.Context) error { return nil },
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	ok, err := s.Exists("exists-1")
+	if err != nil {
+		t.Fatalf("Exists: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected job to exist")
+	}
+
+	ok, err = s.Exists("nonexistent")
+	if err != nil {
+		t.Fatalf("Exists: %v", err)
+	}
+	if ok {
+		t.Fatal("expected job to not exist")
+	}
+}
+
+func TestExistsNoStore(t *testing.T) {
+	s, _ := scheduler.New(context.Background())
+	_, err := s.Exists("any")
+	if !errors.Is(err, scheduler.ErrNoStore) {
+		t.Fatalf("expected ErrNoStore, got %v", err)
+	}
+}
+
+func TestDeleteNoStore(t *testing.T) {
+	s, _ := scheduler.New(context.Background())
+	err := s.Delete("any")
+	if !errors.Is(err, scheduler.ErrNoStore) {
+		t.Fatalf("expected ErrNoStore, got %v", err)
+	}
+}
+
+func TestRegisterHandlerOnly(t *testing.T) {
+	// Handler-only registration (no Trigger) should succeed without a store.
+	s, _ := scheduler.New(context.Background())
+	err := s.Register(scheduler.Job{
+		ID: "handler-only",
+		Fn: func(_ context.Context) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("expected handler-only Register to succeed, got %v", err)
+	}
+}
