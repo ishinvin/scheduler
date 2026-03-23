@@ -44,7 +44,7 @@ func main() {
     defer stop()
 
     sched, err := scheduler.New(ctx,
-        scheduler.WithMemoryStore(),
+        scheduler.WithMemory(),
     )
     if err != nil {
         log.Fatal(err)
@@ -159,7 +159,7 @@ The store is always the source of truth — there is no in-memory scheduling sta
 
 | Database   | Option                                     |
 | ---------- | ------------------------------------------ |
-| Memory     | `WithMemoryStore()`                        |
+| Memory     | `WithMemory()`                        |
 | PostgreSQL | `WithJDBC(db, "postgres", tablePrefix)`    |
 | Oracle     | `WithJDBC(db, "oracle", tablePrefix)`      |
 | MySQL      | `WithJDBC(db, "mysql", tablePrefix)`       |
@@ -207,7 +207,7 @@ sched.Run() error
 
 ```go
 // Store options (pick one)
-scheduler.WithMemoryStore()                          // In-memory store (single-instance)
+scheduler.WithMemory()                          // In-memory store (single-instance)
 scheduler.WithJDBC(db, "postgres", "")               // PostgreSQL store
 scheduler.WithJDBC(db, "oracle", "")                 // Oracle store
 scheduler.WithJDBC(db, "mysql", "")                  // MySQL store
@@ -222,7 +222,7 @@ scheduler.WithVerbose()                              // Enable info-level logs (
 
 // Scheduler options
 scheduler.WithInstanceID(id)                         // Set instance ID (default: hostname-pid)
-scheduler.WithPollInterval(d)                        // Safety fallback poll interval (default: 15s)
+scheduler.WithPollInterval(d)                        // Safety fallback poll interval (default: 30s)
 scheduler.WithMisfireThreshold(d)                    // Stale job recovery threshold (default: 1m)
 scheduler.WithShutdownTimeout(d)                     // Max wait for in-flight jobs on shutdown (default: 30s)
 scheduler.WithCleanupTimeout(d)                      // Max wait for post-execution DB cleanup (default: 5s)

@@ -16,7 +16,7 @@ func main() {
 	defer stop()
 
 	sched, err := scheduler.New(ctx,
-		scheduler.WithMemoryStore(),
+		scheduler.WithMemory(),
 	)
 	if err != nil {
 		log.Fatalf("init scheduler: %v", err)

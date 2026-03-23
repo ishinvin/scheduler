@@ -13,8 +13,8 @@ import (
 // Option configures a scheduler.
 type Option func(*scheduler)
 
-// WithMemoryStore uses an in-memory job store. Suitable for single-instance use.
-func WithMemoryStore() Option {
+// WithMemory uses an in-memory job store. Suitable for single-instance use.
+func WithMemory() Option {
 	return func(sc *scheduler) { sc.store = memory.NewMemory() }
 }
 

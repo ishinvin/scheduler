@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultMisfireThreshold = 1 * time.Minute
-	defaultPollInterval     = 15 * time.Second
+	defaultPollInterval     = 30 * time.Second
 	defaultShutdownTimeout  = 30 * time.Second
 	defaultCleanupTimeout   = 5 * time.Second
 )
@@ -52,21 +52,24 @@ type Job struct {
 
 // scheduler is the concrete implementation of Scheduler.
 type scheduler struct {
-	handlers         sync.Map // job ID -> func(ctx context.Context) error
+	ctx              context.Context
 	store            store.JobStore
-	logger           *slog.Logger
-	verbose          bool
 	instanceID       string
 	misfireThreshold time.Duration
 	pollInterval     time.Duration
 	shutdownTimeout  time.Duration
 	cleanupTimeout   time.Duration
-	initSchema       bool
 	onError          func(jobID string, err error)
-	ctx              context.Context
-	wakeUp           chan signal
-	wg               sync.WaitGroup
-	running          sync.Mutex
+
+	logger     *slog.Logger
+	verbose    bool
+	initSchema bool
+
+	wg      sync.WaitGroup
+	wakeUp  chan signal
+	running sync.Mutex
+
+	handlers sync.Map // job ID -> func(ctx context.Context) error
 }
 
 // New creates a new Scheduler.
@@ -232,20 +235,11 @@ func (s *scheduler) Run() error {
 
 	s.logInfo("scheduler starting", "instance", s.instanceID, "poll_interval", s.pollInterval, "misfire_threshold", s.misfireThreshold)
 
-	// Stale job recovery ticker.
-	var recoveryTicker *time.Ticker
-	var recoveryC <-chan time.Time
-	if s.misfireThreshold > 0 {
-		recoveryTicker = time.NewTicker(s.misfireThreshold / 2)
-		recoveryC = recoveryTicker.C
-		// Recovery once at startup.
-		s.recoverStaleJobs()
+	// Periodically recover jobs stuck in ACQUIRED state (e.g. after instance crash).
+	recoveryTicker, recoveryC := s.startRecovery()
+	if recoveryTicker != nil {
+		defer recoveryTicker.Stop()
 	}
-	defer func() {
-		if recoveryTicker != nil {
-			recoveryTicker.Stop()
-		}
-	}()
 
 	for {
 		now := time.Now()
@@ -263,7 +257,7 @@ func (s *scheduler) Run() error {
 
 			reloop := s.dispatchBatch(records, recoveryC)
 			if s.ctx.Err() != nil {
-				s.waitForInFlight()
+				s.awaitShutdown()
 				return nil
 			}
 			if reloop {
@@ -271,29 +265,9 @@ func (s *scheduler) Run() error {
 			}
 		}
 
-		if done := s.waitForEvent(s.nextPollWait(), recoveryC); done {
+		if done := s.awaitNextCycle(s.nextPollWait(), recoveryC); done {
 			return nil
 		}
-	}
-}
-
-// waitForEvent blocks until timer, signal, recovery, or ctx cancel. Returns true to stop.
-func (s *scheduler) waitForEvent(wait time.Duration, recoveryC <-chan time.Time) bool {
-	timer := time.NewTimer(wait)
-	select {
-	case <-timer.C:
-		return false
-	case <-s.wakeUp:
-		timer.Stop()
-		return false
-	case <-recoveryC:
-		timer.Stop()
-		s.recoverStaleJobs()
-		return false
-	case <-s.ctx.Done():
-		timer.Stop()
-		s.waitForInFlight()
-		return true
 	}
 }
 
@@ -302,7 +276,7 @@ func (s *scheduler) dispatchBatch(records []*store.JobRecord, recoveryC <-chan t
 	for i, rec := range records {
 		// Wait until fire time.
 		if delay := time.Until(rec.NextFireTime); delay > 0 {
-			interrupted, reloop := s.waitUntil(delay, recoveryC)
+			interrupted, reloop := s.awaitFireTime(delay, recoveryC)
 			if interrupted {
 				s.releaseRemaining(records[i:])
 				return reloop
@@ -311,25 +285,6 @@ func (s *scheduler) dispatchBatch(records []*store.JobRecord, recoveryC <-chan t
 		s.dispatchJob(rec)
 	}
 	return true // batch complete — re-poll immediately for next batch
-}
-
-// waitUntil blocks until duration elapses. Returns (interrupted, shouldReloop).
-func (s *scheduler) waitUntil(d time.Duration, recoveryC <-chan time.Time) (interrupted, reloop bool) {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	for {
-		select {
-		case <-timer.C:
-			return false, false
-		case <-s.ctx.Done():
-			return true, false
-		case <-s.wakeUp:
-			return true, true
-		case <-recoveryC:
-			s.recoverStaleJobs()
-			// Recovery doesn't affect current batch.
-		}
-	}
 }
 
 // dispatchJob resolves the handler and launches the job.
@@ -363,26 +318,6 @@ func (s *scheduler) dispatchJob(rec *store.JobRecord) {
 	s.logInfo("dispatching job", "job", rec.ID, "name", rec.Name)
 	s.wg.Add(1)
 	go s.executeJob(job)
-}
-
-// releaseRemaining releases unfired jobs back to WAITING.
-func (s *scheduler) releaseRemaining(records []*store.JobRecord) {
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), s.cleanupTimeout)
-	defer cancel()
-	for _, rec := range records {
-		if err := s.store.ReleaseJob(cleanupCtx, rec.ID, rec.NextFireTime); err != nil && !errors.Is(err, store.ErrJobNotFound) {
-			s.logError("failed to release unfired job", "job", rec.ID, "error", err)
-		}
-	}
-}
-
-// resolveHandler looks up the Fn for a job ID.
-func (s *scheduler) resolveHandler(id string) func(ctx context.Context) error {
-	v, ok := s.handlers.Load(id)
-	if !ok {
-		return nil
-	}
-	return v.(func(ctx context.Context) error)
 }
 
 // executeJob runs an acquired job.
@@ -419,6 +354,28 @@ func (s *scheduler) executeJob(job Job) {
 	}
 }
 
+// releaseRemaining releases unfired jobs back to WAITING.
+func (s *scheduler) releaseRemaining(records []*store.JobRecord) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), s.cleanupTimeout)
+	defer cancel()
+	for _, rec := range records {
+		if err := s.store.ReleaseJob(cleanupCtx, rec.ID, rec.NextFireTime); err != nil && !errors.Is(err, store.ErrJobNotFound) {
+			s.logError("failed to release unfired job", "job", rec.ID, "error", err)
+		}
+	}
+}
+
+// startRecovery initializes the stale job recovery ticker and runs recovery once at startup.
+// Returns the ticker (caller must defer Stop) and its channel, or nil if disabled.
+func (s *scheduler) startRecovery() (ticker *time.Ticker, ch <-chan time.Time) {
+	if s.misfireThreshold <= 0 {
+		return nil, nil
+	}
+	ticker = time.NewTicker(s.misfireThreshold)
+	s.recoverStaleJobs()
+	return ticker, ticker.C
+}
+
 // recoverStaleJobs resets jobs stuck in ACQUIRED past the misfire threshold.
 func (s *scheduler) recoverStaleJobs() {
 	n, err := s.store.RecoverStaleJobs(s.ctx, s.misfireThreshold)
@@ -431,8 +388,27 @@ func (s *scheduler) recoverStaleJobs() {
 	}
 }
 
-// waitForInFlight waits for running jobs to finish, bounded by shutdownTimeout.
-func (s *scheduler) waitForInFlight() {
+// awaitFireTime blocks until duration elapses. Returns (interrupted, shouldReloop).
+func (s *scheduler) awaitFireTime(d time.Duration, recoveryC <-chan time.Time) (interrupted, reloop bool) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			return false, false
+		case <-s.ctx.Done():
+			return true, false
+		case <-s.wakeUp:
+			return true, true
+		case <-recoveryC:
+			s.recoverStaleJobs()
+			// Recovery doesn't affect current batch.
+		}
+	}
+}
+
+// awaitShutdown waits for running jobs to finish, bounded by shutdownTimeout.
+func (s *scheduler) awaitShutdown() {
 	done := make(chan signal)
 	go func() {
 		s.wg.Wait()
@@ -444,6 +420,26 @@ func (s *scheduler) waitForInFlight() {
 		s.logInfo("all jobs finished")
 	case <-time.After(s.shutdownTimeout):
 		s.logError("shutdown timeout exceeded, some jobs may still be running", "timeout", s.shutdownTimeout)
+	}
+}
+
+// awaitNextCycle blocks until timer, signal, recovery, or ctx cancel. Returns true to stop.
+func (s *scheduler) awaitNextCycle(wait time.Duration, recoveryC <-chan time.Time) bool {
+	timer := time.NewTimer(wait)
+	select {
+	case <-timer.C:
+		return false
+	case <-s.wakeUp:
+		timer.Stop()
+		return false
+	case <-recoveryC:
+		timer.Stop()
+		s.recoverStaleJobs()
+		return false
+	case <-s.ctx.Done():
+		timer.Stop()
+		s.awaitShutdown()
+		return true
 	}
 }
 
@@ -463,6 +459,26 @@ func (s *scheduler) nextPollWait() time.Duration {
 	return wait
 }
 
+// ---------------------------------------------------------------------------
+// Helper functions
+// ---------------------------------------------------------------------------
+
+func (s *scheduler) signal() {
+	select {
+	case s.wakeUp <- signal{}:
+	default:
+	}
+}
+
+// resolveHandler looks up the Fn for a job ID.
+func (s *scheduler) resolveHandler(id string) func(ctx context.Context) error {
+	v, ok := s.handlers.Load(id)
+	if !ok {
+		return nil
+	}
+	return v.(func(ctx context.Context) error)
+}
+
 func validateJob(job Job) error {
 	if job.ID == "" {
 		return ErrEmptyJobID
@@ -471,13 +487,6 @@ func validateJob(job Job) error {
 		return ErrNegativeTimeout
 	}
 	return nil
-}
-
-func (s *scheduler) signal() {
-	select {
-	case s.wakeUp <- signal{}:
-	default:
-	}
 }
 
 func (s *scheduler) logInfo(msg string, keysAndValues ...any) {

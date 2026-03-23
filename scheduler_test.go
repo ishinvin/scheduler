@@ -23,7 +23,7 @@ func mustInterval(t *testing.T, d time.Duration) *scheduler.IntervalTrigger {
 func newTestScheduler(t *testing.T, ctx context.Context) scheduler.Scheduler {
 	t.Helper()
 	s, err := scheduler.New(ctx,
-		scheduler.WithMemoryStore(),
+		scheduler.WithMemory(),
 		scheduler.WithPollInterval(25*time.Millisecond),
 	)
 	if err != nil {
@@ -230,7 +230,7 @@ func TestIntervalTrigger(t *testing.T) {
 func TestRecoverStaleJobs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s, err := scheduler.New(ctx,
-		scheduler.WithMemoryStore(),
+		scheduler.WithMemory(),
 		scheduler.WithMisfireThreshold(100*time.Millisecond),
 		scheduler.WithPollInterval(25*time.Millisecond),
 	)
@@ -267,7 +267,7 @@ func TestRecoverStaleJobs(t *testing.T) {
 func TestMultiInstanceNoDuplicate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s1, err := scheduler.New(ctx,
-		scheduler.WithMemoryStore(),
+		scheduler.WithMemory(),
 		scheduler.WithInstanceID("instance-1"),
 		scheduler.WithPollInterval(25*time.Millisecond),
 	)
@@ -305,7 +305,7 @@ func TestMultiInstanceNoDuplicate(t *testing.T) {
 func TestMultiInstanceIntervalDistribution(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s, _ := scheduler.New(ctx,
-		scheduler.WithMemoryStore(),
+		scheduler.WithMemory(),
 		scheduler.WithInstanceID("instance-1"),
 		scheduler.WithPollInterval(25*time.Millisecond),
 	)
@@ -426,7 +426,7 @@ func TestOnErrorCallback(t *testing.T) {
 	var capturedErr atomic.Value
 
 	s, err := scheduler.New(ctx,
-		scheduler.WithMemoryStore(),
+		scheduler.WithMemory(),
 		scheduler.WithPollInterval(25*time.Millisecond),
 		scheduler.WithOnError(func(jobID string, jobErr error) {
 			capturedID = jobID
