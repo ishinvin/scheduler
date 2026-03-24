@@ -15,32 +15,21 @@ test:
 lint:
 	golangci-lint run ./...
 
-# Start all databases
-db-up:
-	docker compose -f _examples/compose.yml up -d
-
-# Stop all databases
-db-down:
-	docker compose -f _examples/compose.yml down
-
-# Stop all databases and remove volumes
-db-clean:
-	docker compose -f _examples/compose.yml down -v
-
-# Run example: make run-example APP=postgres
-run-example:
-	cd _examples/$(APP) && go run .
-
-# Run multi-instance example (3 replicas + Postgres)
-swarm-up:
-	docker compose -f _examples/multi-instance/compose.yml up --build
-
-# Stop multi-instance example
-swarm-down:
-	docker compose -f _examples/multi-instance/compose.yml down -v
-
 # Run lint and tests
 check: lint test
 
 # Setup development environment
 setup: tools hooks
+
+# Docker: make up APP=postgres | make down APP=postgres | make clean APP=postgres
+up:
+	docker compose -f _examples/$(APP)/compose.yml up -d
+
+down:
+	docker compose -f _examples/$(APP)/compose.yml down
+
+clean:
+	docker compose -f _examples/$(APP)/compose.yml down -v
+
+logs:
+	docker compose -f _examples/$(APP)/compose.yml logs -f

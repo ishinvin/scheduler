@@ -1,5 +1,5 @@
 -- Oracle schema for Go Scheduler
--- Run this manually or via a migration tool (Liquibase, Flyway, etc.)
+-- Run this manually or via a migration tool
 -- when using initialize-schema: never (the default).
 --
 -- To use a table prefix, replace "SCHEDULER_" with e.g. "MYAPP_SCHEDULER_"
@@ -15,10 +15,9 @@ CREATE TABLE SCHEDULER_JOBS (
     STATE          VARCHAR2(32) DEFAULT 'WAITING' NOT NULL,
     INSTANCE_ID    VARCHAR2(256),
     ACQUIRED_AT    TIMESTAMP WITH TIME ZONE,
-    ENABLED        NUMBER(1) DEFAULT 1 NOT NULL,
     CREATED_AT     TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     UPDATED_AT     TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
 );
 
 CREATE INDEX IDX_SCHED_JOBS_FIRE
-    ON SCHEDULER_JOBS (NEXT_FIRE_TIME, STATE, ENABLED);
+    ON SCHEDULER_JOBS (NEXT_FIRE_TIME, STATE);

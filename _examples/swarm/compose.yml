@@ -14,7 +14,7 @@ services:
   worker:
     build:
       context: ../..
-      dockerfile: _examples/multi-instance/Dockerfile
+      dockerfile: _examples/swarm/Dockerfile
     environment:
       DATABASE_URL: postgres://scheduler:scheduler@postgres:5432/scheduler?sslmode=disable
     depends_on:

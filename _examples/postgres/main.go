@@ -31,7 +31,7 @@ func main() {
 	defer stop()
 
 	sched, err := scheduler.New(ctx,
-		scheduler.WithJDBC(db, "postgres", ""),
+		scheduler.WithJDBC(db, "postgres", "myapp_"),
 		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID("worker-1"),
 	)
@@ -39,38 +39,38 @@ func main() {
 		log.Fatalf("init scheduler: %v", err)
 	}
 
-	// Register jobs. These are persisted to PostgreSQL and survive restarts.
-	// The Fn is stored by job ID so rehydrated jobs can resolve it on restart.
-	cleanupTrigger, _ := scheduler.NewCronTrigger("0 */1 * * * *")
+	// Cron trigger: every second, with a 10s execution timeout.
+	cronTrigger, _ := scheduler.NewCronTrigger("*/1 * * * * *")
 	sched.Register(scheduler.Job{
-		ID:      "cleanup-job",
-		Name:    "Periodic cleanup",
-		Trigger: cleanupTrigger,
-		Timeout: 2 * time.Minute,
+		ID:      "cron-job",
+		Name:    "Every 1s",
+		Trigger: cronTrigger,
+		Timeout: 10 * time.Second,
 		Fn: func(ctx context.Context) error {
-			fmt.Println(time.Now().Format(time.RFC3339), "running cleanup...")
+			fmt.Println(time.Now().Format(time.RFC3339), "cron job fired")
 			return nil
 		},
 	})
 
-	reportTrigger, _ := scheduler.NewCronTrigger("0 0 9 * * *")
+	// Interval trigger: every 5 seconds.
+	intervalTrigger, _ := scheduler.NewIntervalTrigger(5 * time.Second)
 	sched.Register(scheduler.Job{
-		ID:      "daily-report",
-		Name:    "Daily report",
-		Trigger: reportTrigger,
+		ID:      "interval-job",
+		Name:    "Every 5s",
+		Trigger: intervalTrigger,
 		Fn: func(ctx context.Context) error {
-			fmt.Println(time.Now().Format(time.RFC3339), "generating report...")
+			fmt.Println(time.Now().Format(time.RFC3339), "interval job fired")
 			return nil
 		},
 	})
 
-	heartbeatTrigger, _ := scheduler.NewIntervalTrigger(10 * time.Second)
+	// Once trigger: 10 seconds from now.
 	sched.Register(scheduler.Job{
-		ID:      "heartbeat",
-		Name:    "Heartbeat",
-		Trigger: heartbeatTrigger,
+		ID:      "once-job",
+		Name:    "Fire once",
+		Trigger: scheduler.NewOnceTrigger(time.Now().Add(10 * time.Second)),
 		Fn: func(ctx context.Context) error {
-			fmt.Println(time.Now().Format(time.RFC3339), "heartbeat")
+			fmt.Println(time.Now().Format(time.RFC3339), "once job fired!")
 			return nil
 		},
 	})

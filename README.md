@@ -7,7 +7,7 @@ A job scheduling library for Go with pluggable job stores and multi-instance sup
 - **Cron, interval, and one-time triggers** with second-level granularity
 - **Register / Reschedule / Delete** jobs at runtime
 - **Built-in stores** — memory (single-instance) or SQL (Postgres, Oracle, MySQL)
-- **Multi-instance safe** — `FOR UPDATE SKIP LOCKED` + optimistic locking
+- **Multi-instance safe** — multiple replicas share the same database without duplicate execution
 - **Crash recovery** — stale jobs automatically recovered
 - **Graceful shutdown** — waits for in-flight jobs on context cancellation
 
@@ -100,7 +100,7 @@ scheduler.WithOnError(func(jobID string, err error))  // error callback
 
 ## Examples
 
-See [\_examples/](_examples/) for memory, postgres, oracle, mysql, and multi-instance examples.
+See [\_examples/](_examples/)
 
 ## License
 

@@ -15,18 +15,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	sched, err := scheduler.New(ctx,
-		scheduler.WithMemory(),
-	)
+	sched, err := scheduler.New(ctx, scheduler.WithMemory())
 	if err != nil {
 		log.Fatalf("init scheduler: %v", err)
 	}
 
-	// Cron trigger: every minute, with a 10s execution timeout.
-	cronTrigger, _ := scheduler.NewCronTrigger("0 * * * * *")
+	// Cron trigger: every second, with a 10s execution timeout.
+	cronTrigger, _ := scheduler.NewCronTrigger("*/1 * * * * *")
 	sched.Register(scheduler.Job{
 		ID:      "cron-job",
-		Name:    "Every minute",
+		Name:    "Every 1s",
 		Trigger: cronTrigger,
 		Timeout: 10 * time.Second,
 		Fn: func(ctx context.Context) error {

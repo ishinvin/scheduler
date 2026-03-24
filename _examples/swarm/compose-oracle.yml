@@ -1,0 +1,30 @@
+# docker compose -f _examples/swarm/compose-oracle.yml up --build
+
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    environment:
+      ORACLE_PASSWORD: scheduler
+      APP_USER: scheduler
+      APP_USER_PASSWORD: scheduler
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: _examples/swarm/Dockerfile
+    environment:
+      DB_DIALECT: oracle
+      DATABASE_URL: oracle://scheduler:scheduler@oracle:1521/FREEPDB1
+    depends_on:
+      oracle:
+        condition: service_healthy
+    deploy:
+      replicas: 3
+
+volumes:
+  oracle_data:

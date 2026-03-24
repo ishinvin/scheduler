@@ -135,6 +135,10 @@ func (s *scheduler) Register(job Job) error {
 		return err
 	}
 	if err := s.store.CreateJob(s.ctx, record); err != nil {
+		// Another instance may have created the job concurrently — treat as idempotent.
+		if _, getErr := s.store.GetJob(s.ctx, job.ID); getErr == nil {
+			return nil
+		}
 		return fmt.Errorf("scheduler: register job: %w", err)
 	}
 
@@ -171,7 +175,17 @@ func (s *scheduler) Reschedule(job Job) error {
 	rec, err := s.store.GetJob(s.ctx, job.ID)
 	if errors.Is(err, store.ErrJobNotFound) {
 		if err := s.store.CreateJob(s.ctx, record); err != nil {
-			return fmt.Errorf("scheduler: reschedule job: %w", err)
+			// Another instance may have created the job concurrently — retry as update.
+			if rec, getErr := s.store.GetJob(s.ctx, job.ID); getErr == nil {
+				record.State = rec.State
+				record.InstanceID = rec.InstanceID
+				record.AcquiredAt = rec.AcquiredAt
+				if updateErr := s.store.UpdateJob(s.ctx, record); updateErr != nil {
+					return fmt.Errorf("scheduler: reschedule job: %w", updateErr)
+				}
+			} else {
+				return fmt.Errorf("scheduler: reschedule job: %w", err)
+			}
 		}
 	} else if err != nil {
 		return fmt.Errorf("scheduler: reschedule job: %w", err)

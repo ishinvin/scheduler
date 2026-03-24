@@ -63,6 +63,10 @@ func (s *jdbcStore) CreateSchema(ctx context.Context) error {
 			continue
 		}
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			// Oracle lacks IF NOT EXISTS; ORA-00955 means object already exists.
+			if _, ok := s.dialect.(Oracle); ok && strings.Contains(err.Error(), "ORA-00955") {
+				continue
+			}
 			return fmt.Errorf("jdbc store: create schema: %w", err)
 		}
 	}
@@ -72,7 +76,11 @@ func (s *jdbcStore) CreateSchema(ctx context.Context) error {
 func (s *jdbcStore) CreateJob(ctx context.Context, job *store.JobRecord) error {
 	now := time.Now()
 	timeoutSecs := int64(job.Timeout / time.Second)
-	if _, err := s.db.ExecContext(ctx, s.q.insert, job.ID, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, store.StateWaiting, "", nil, now, now); err != nil { //nolint:lll // readable
+	var nextFire any = job.NextFireTime
+	if job.NextFireTime.IsZero() {
+		nextFire = nil
+	}
+	if _, err := s.db.ExecContext(ctx, s.q.insert, job.ID, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, nextFire, string(store.StateWaiting), nil, nil, now, now); err != nil { //nolint:lll // readable
 		return fmt.Errorf("jdbc store: create job: %w", err)
 	}
 	return nil
@@ -80,7 +88,11 @@ func (s *jdbcStore) CreateJob(ctx context.Context, job *store.JobRecord) error {
 
 func (s *jdbcStore) UpdateJob(ctx context.Context, job *store.JobRecord) error {
 	timeoutSecs := int64(job.Timeout / time.Second)
-	if _, err := s.db.ExecContext(ctx, s.q.update, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, job.NextFireTime, time.Now(), job.ID); err != nil { //nolint:lll // readable
+	var nextFire any = job.NextFireTime
+	if job.NextFireTime.IsZero() {
+		nextFire = nil
+	}
+	if _, err := s.db.ExecContext(ctx, s.q.update, job.Name, job.TriggerType, job.TriggerValue, timeoutSecs, nextFire, time.Now(), job.ID); err != nil { //nolint:lll // readable
 		return fmt.Errorf("jdbc store: update job: %w", err)
 	}
 	return nil
@@ -116,18 +128,12 @@ func (s *jdbcStore) GetJob(ctx context.Context, id string) (*store.JobRecord, er
 // AcquireNextJobs uses SELECT FOR UPDATE SKIP LOCKED + UPDATE within a single
 // transaction to atomically find and claim due jobs.
 func (s *jdbcStore) AcquireNextJobs(ctx context.Context, now time.Time, instanceID string) ([]*store.JobRecord, error) {
-	conn, err := s.db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("jdbc store: get conn: %w", err)
-	}
-	defer conn.Close()
-
-	tx, err := conn.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("jdbc store: begin tx: %w", err)
 	}
 
-	rows, err := tx.QueryContext(ctx, s.q.listDue, store.StateWaiting, now)
+	rows, err := tx.QueryContext(ctx, s.q.listDue, string(store.StateWaiting), now)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("jdbc store: list due jobs: %w", err)
@@ -156,7 +162,7 @@ func (s *jdbcStore) AcquireNextJobs(ctx context.Context, now time.Time, instance
 	ts := time.Now()
 	var acquired []*store.JobRecord
 	for _, rec := range dueJobs {
-		result, err := tx.ExecContext(ctx, s.q.acquire, store.StateAcquired, instanceID, ts, ts, rec.ID, store.StateWaiting)
+		result, err := tx.ExecContext(ctx, s.q.acquire, string(store.StateAcquired), instanceID, ts, ts, rec.ID, string(store.StateWaiting))
 		if err != nil {
 			_ = tx.Rollback()
 			return nil, fmt.Errorf("jdbc store: claim job %s: %w", rec.ID, err)
@@ -177,11 +183,13 @@ func (s *jdbcStore) AcquireNextJobs(ctx context.Context, now time.Time, instance
 }
 
 func (s *jdbcStore) ReleaseJob(ctx context.Context, id string, nextFireTime time.Time) error {
-	state := store.StateWaiting
+	state := string(store.StateWaiting)
+	var nextFire any = nextFireTime
 	if nextFireTime.IsZero() {
-		state = store.StateComplete
+		state = string(store.StateComplete)
+		nextFire = nil
 	}
-	if _, err := s.db.ExecContext(ctx, s.q.release, state, nextFireTime, time.Now(), id); err != nil {
+	if _, err := s.db.ExecContext(ctx, s.q.release, state, nextFire, time.Now(), id); err != nil {
 		return fmt.Errorf("jdbc store: release job: %w", err)
 	}
 	return nil
@@ -190,7 +198,7 @@ func (s *jdbcStore) ReleaseJob(ctx context.Context, id string, nextFireTime time
 func (s *jdbcStore) RecoverStaleJobs(ctx context.Context, threshold time.Duration) (int, error) {
 	now := time.Now()
 	thresholdSecs := int64(threshold / time.Second)
-	result, err := s.db.ExecContext(ctx, s.q.recoverStale, store.StateWaiting, now, store.StateAcquired, thresholdSecs, now)
+	result, err := s.db.ExecContext(ctx, s.q.recoverStale, string(store.StateWaiting), now, string(store.StateAcquired), thresholdSecs, now)
 	if err != nil {
 		return 0, fmt.Errorf("jdbc store: recover stale jobs: %w", err)
 	}
@@ -200,7 +208,7 @@ func (s *jdbcStore) RecoverStaleJobs(ctx context.Context, threshold time.Duratio
 
 func (s *jdbcStore) NextFireTime(ctx context.Context) (time.Time, error) {
 	var t sql.NullTime
-	if err := s.db.QueryRowContext(ctx, s.q.nextFireTime, store.StateWaiting).Scan(&t); err != nil {
+	if err := s.db.QueryRowContext(ctx, s.q.nextFireTime, string(store.StateWaiting)).Scan(&t); err != nil {
 		return time.Time{}, fmt.Errorf("jdbc store: next fire time: %w", err)
 	}
 	return t.Time, nil
@@ -213,11 +221,15 @@ type scanner interface {
 func (*jdbcStore) scanJob(sc scanner) (*store.JobRecord, error) {
 	var rec store.JobRecord
 	var timeoutSecs int64
+	var state string
+	var nextFireTime sql.NullTime
 	var instanceID sql.NullString
 	var acquiredAt sql.NullTime
-	if err := sc.Scan(&rec.ID, &rec.Name, &rec.TriggerType, &rec.TriggerValue, &timeoutSecs, &rec.NextFireTime, &rec.State, &instanceID, &acquiredAt, &rec.CreatedAt, &rec.UpdatedAt); err != nil { //nolint:lll // column list
+	if err := sc.Scan(&rec.ID, &rec.Name, &rec.TriggerType, &rec.TriggerValue, &timeoutSecs, &nextFireTime, &state, &instanceID, &acquiredAt, &rec.CreatedAt, &rec.UpdatedAt); err != nil { //nolint:lll // column list
 		return nil, err
 	}
+	rec.State = store.JobState(state)
+	rec.NextFireTime = nextFireTime.Time
 	rec.Timeout = time.Duration(timeoutSecs) * time.Second
 	rec.InstanceID = instanceID.String
 	rec.AcquiredAt = acquiredAt.Time

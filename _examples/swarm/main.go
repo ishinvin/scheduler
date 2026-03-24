@@ -11,11 +11,17 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	_ "github.com/sijms/go-ora/v2"
 
 	"github.com/ishinvin/scheduler"
 )
 
 func main() {
+	dialectName := os.Getenv("DB_DIALECT")
+	if dialectName == "" {
+		dialectName = "postgres"
+	}
+
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://scheduler:scheduler@postgres:5432/scheduler?sslmode=disable"
@@ -27,7 +33,7 @@ func main() {
 		instanceID = hostname
 	}
 
-	db, err := sql.Open("postgres", dsn)
+	db, err := sql.Open(dialectName, dsn)
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
@@ -37,45 +43,44 @@ func main() {
 	defer stop()
 
 	sched, err := scheduler.New(ctx,
-		scheduler.WithJDBC(db, "postgres", ""),
+		scheduler.WithJDBC(db, dialectName, ""),
 		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID(instanceID),
+		// scheduler.WithVerbose(),
 	)
 	if err != nil {
 		log.Fatalf("init scheduler: %v", err)
 	}
 
-	// Each replica registers the same jobs.
-	// The first to start persists them; the rest just register their handlers.
-	heartbeatTrigger, _ := scheduler.NewIntervalTrigger(1 * time.Second)
-	cleanupTrigger, _ := scheduler.NewCronTrigger("0 */1 * * * *")
+	cronTrigger, _ := scheduler.NewCronTrigger("*/1 * * * * *")
+	intervalTrigger, _ := scheduler.NewIntervalTrigger(5 * time.Second)
 
 	jobs := []scheduler.Job{
 		{
-			ID:      "heartbeat",
-			Name:    "Heartbeat",
-			Trigger: heartbeatTrigger,
-			Fn: func(_ context.Context) error {
-				fmt.Printf("[%s] %s  heartbeat\n", instanceID, time.Now().Format(time.TimeOnly))
+			ID:      "cron-job",
+			Name:    "Every 1s",
+			Trigger: cronTrigger,
+			Timeout: 10 * time.Second,
+			Fn: func(ctx context.Context) error {
+				fmt.Printf("[%s] %s cron job fired\n", instanceID, time.Now().Format(time.TimeOnly))
 				return nil
 			},
 		},
 		{
-			ID:      "cleanup",
-			Name:    "Periodic cleanup",
-			Trigger: cleanupTrigger,
-			Timeout: 30 * time.Second,
-			Fn: func(_ context.Context) error {
-				fmt.Printf("[%s] %s  cleanup\n", instanceID, time.Now().Format(time.TimeOnly))
+			ID:      "interval-job",
+			Name:    "Every 5s",
+			Trigger: intervalTrigger,
+			Fn: func(ctx context.Context) error {
+				fmt.Printf("[%s] %s interval job fired\n", instanceID, time.Now().Format(time.TimeOnly))
 				return nil
 			},
 		},
 		{
-			ID:      "report",
-			Name:    "One-time report",
+			ID:      "once-job",
+			Name:    "Fire once",
 			Trigger: scheduler.NewOnceTrigger(time.Now().Add(10 * time.Second)),
-			Fn: func(_ context.Context) error {
-				fmt.Printf("[%s] %s  report (once)\n", instanceID, time.Now().Format(time.TimeOnly))
+			Fn: func(ctx context.Context) error {
+				fmt.Printf("[%s] %s once job fired!\n", instanceID, time.Now().Format(time.TimeOnly))
 				return nil
 			},
 		},
@@ -87,7 +92,7 @@ func main() {
 		}
 	}
 
-	fmt.Printf("[%s] scheduler started\n", instanceID)
+	fmt.Printf("[%s] scheduler started (dialect=%s)\n", instanceID, dialectName)
 	if err := sched.Run(); err != nil {
 		log.Fatal(err)
 	}
