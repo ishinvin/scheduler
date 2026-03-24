@@ -42,14 +42,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	sched, err := scheduler.New(ctx,
+	sched, err := scheduler.New(
 		scheduler.WithJDBC(db, dialectName, ""),
-		scheduler.WithInitializeSchema(),
 		scheduler.WithInstanceID(instanceID),
 		// scheduler.WithVerbose(),
 	)
 	if err != nil {
 		log.Fatalf("init scheduler: %v", err)
+	}
+
+	if err := sched.InitSchema(ctx); err != nil {
+		log.Fatalf("init schema: %v", err)
 	}
 
 	cronTrigger, _ := scheduler.NewCronTrigger("*/1 * * * * *")
@@ -87,13 +90,13 @@ func main() {
 	}
 
 	for _, job := range jobs {
-		if err := sched.Register(job); err != nil {
+		if err := sched.Register(ctx, job); err != nil {
 			log.Fatalf("register %s: %v", job.ID, err)
 		}
 	}
 
 	fmt.Printf("[%s] scheduler started (dialect=%s)\n", instanceID, dialectName)
-	if err := sched.Run(); err != nil {
+	if err := sched.Run(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

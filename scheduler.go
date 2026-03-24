@@ -24,21 +24,24 @@ type signal = struct{}
 
 // Scheduler is the public interface for job scheduling.
 type Scheduler interface {
+	// InitSchema creates the required tables in the job store.
+	InitSchema(ctx context.Context) error
+
 	// Register adds a job to the scheduler and persists it to the store.
 	// If Trigger is nil, only the handler is registered (no job is scheduled).
-	Register(job Job) error
+	Register(ctx context.Context, job Job) error
 
 	// Reschedule creates or updates a job with the given trigger.
-	Reschedule(job Job) error
+	Reschedule(ctx context.Context, job Job) error
 
 	// Exists checks whether a job with the given ID exists in the store.
-	Exists(id string) (bool, error)
+	Exists(ctx context.Context, id string) (bool, error)
 
 	// Delete removes a job from the scheduler and the job store.
-	Delete(id string) error
+	Delete(ctx context.Context, id string) error
 
 	// Run starts the scheduling loop. Blocks until the context is canceled.
-	Run() error
+	Run(ctx context.Context) error
 }
 
 // Job is the unit of work the scheduler manages.
@@ -61,9 +64,8 @@ type scheduler struct {
 	cleanupTimeout   time.Duration
 	onError          func(jobID string, err error)
 
-	logger     *slog.Logger
-	verbose    bool
-	initSchema bool
+	logger  *slog.Logger
+	verbose bool
 
 	wg      sync.WaitGroup
 	wakeUp  chan signal
@@ -73,9 +75,8 @@ type scheduler struct {
 }
 
 // New creates a new Scheduler.
-func New(ctx context.Context, opts ...Option) (Scheduler, error) {
+func New(opts ...Option) (Scheduler, error) {
 	s := &scheduler{
-		ctx:              ctx,
 		logger:           slog.Default(),
 		misfireThreshold: defaultMisfireThreshold,
 		pollInterval:     defaultPollInterval,
@@ -91,18 +92,20 @@ func New(ctx context.Context, opts ...Option) (Scheduler, error) {
 		o(s)
 	}
 
-	if s.initSchema && s.store != nil {
-		if err := s.store.CreateSchema(s.ctx); err != nil {
-			return nil, fmt.Errorf("scheduler: create schema: %w", err)
-		}
-	}
-
 	return s, nil
+}
+
+// InitSchema creates the required tables in the job store.
+func (s *scheduler) InitSchema(ctx context.Context) error {
+	if s.store == nil {
+		return ErrNoStore
+	}
+	return s.store.CreateSchema(ctx)
 }
 
 // Register adds a job to the scheduler and persists it to the store.
 // If Trigger is nil, only the handler is registered (no job is scheduled).
-func (s *scheduler) Register(job Job) error {
+func (s *scheduler) Register(ctx context.Context, job Job) error {
 	if err := validateJob(job); err != nil {
 		return err
 	}
@@ -123,7 +126,7 @@ func (s *scheduler) Register(job Job) error {
 	}
 
 	// Idempotent: skip if the job already exists.
-	if _, err := s.store.GetJob(s.ctx, job.ID); !errors.Is(err, store.ErrJobNotFound) {
+	if _, err := s.store.GetJob(ctx, job.ID); !errors.Is(err, store.ErrJobNotFound) {
 		return err
 	}
 
@@ -134,9 +137,9 @@ func (s *scheduler) Register(job Job) error {
 	if err != nil {
 		return err
 	}
-	if err := s.store.CreateJob(s.ctx, record); err != nil {
+	if err := s.store.CreateJob(ctx, record); err != nil {
 		// Another instance may have created the job concurrently — treat as idempotent.
-		if _, getErr := s.store.GetJob(s.ctx, job.ID); getErr == nil {
+		if _, getErr := s.store.GetJob(ctx, job.ID); getErr == nil {
 			return nil
 		}
 		return fmt.Errorf("scheduler: register job: %w", err)
@@ -148,7 +151,7 @@ func (s *scheduler) Register(job Job) error {
 }
 
 // Reschedule creates or updates a job with the given trigger.
-func (s *scheduler) Reschedule(job Job) error {
+func (s *scheduler) Reschedule(ctx context.Context, job Job) error {
 	if err := validateJob(job); err != nil {
 		return err
 	}
@@ -172,15 +175,15 @@ func (s *scheduler) Reschedule(job Job) error {
 		return err
 	}
 
-	rec, err := s.store.GetJob(s.ctx, job.ID)
+	rec, err := s.store.GetJob(ctx, job.ID)
 	if errors.Is(err, store.ErrJobNotFound) {
-		if err := s.store.CreateJob(s.ctx, record); err != nil {
+		if err := s.store.CreateJob(ctx, record); err != nil {
 			// Another instance may have created the job concurrently — retry as update.
-			if rec, getErr := s.store.GetJob(s.ctx, job.ID); getErr == nil {
+			if rec, getErr := s.store.GetJob(ctx, job.ID); getErr == nil {
 				record.State = rec.State
 				record.InstanceID = rec.InstanceID
 				record.AcquiredAt = rec.AcquiredAt
-				if updateErr := s.store.UpdateJob(s.ctx, record); updateErr != nil {
+				if updateErr := s.store.UpdateJob(ctx, record); updateErr != nil {
 					return fmt.Errorf("scheduler: reschedule job: %w", updateErr)
 				}
 			} else {
@@ -194,7 +197,7 @@ func (s *scheduler) Reschedule(job Job) error {
 		record.State = rec.State
 		record.InstanceID = rec.InstanceID
 		record.AcquiredAt = rec.AcquiredAt
-		if err := s.store.UpdateJob(s.ctx, record); err != nil {
+		if err := s.store.UpdateJob(ctx, record); err != nil {
 			return fmt.Errorf("scheduler: reschedule job: %w", err)
 		}
 	}
@@ -205,11 +208,11 @@ func (s *scheduler) Reschedule(job Job) error {
 }
 
 // Exists checks whether a job with the given ID exists in the store.
-func (s *scheduler) Exists(id string) (bool, error) {
+func (s *scheduler) Exists(ctx context.Context, id string) (bool, error) {
 	if s.store == nil {
 		return false, ErrNoStore
 	}
-	_, err := s.store.GetJob(s.ctx, id)
+	_, err := s.store.GetJob(ctx, id)
 	if errors.Is(err, store.ErrJobNotFound) {
 		return false, nil
 	}
@@ -220,11 +223,11 @@ func (s *scheduler) Exists(id string) (bool, error) {
 }
 
 // Delete removes a job from the scheduler and the job store.
-func (s *scheduler) Delete(id string) error {
+func (s *scheduler) Delete(ctx context.Context, id string) error {
 	if s.store == nil {
 		return ErrNoStore
 	}
-	if err := s.store.DeleteJob(s.ctx, id); err != nil {
+	if err := s.store.DeleteJob(ctx, id); err != nil {
 		if errors.Is(err, store.ErrJobNotFound) {
 			return ErrJobNotFound
 		}
@@ -237,7 +240,7 @@ func (s *scheduler) Delete(id string) error {
 }
 
 // Run starts the scheduling loop. Blocks until the context is canceled.
-func (s *scheduler) Run() error {
+func (s *scheduler) Run(ctx context.Context) error {
 	if !s.running.TryLock() {
 		return ErrAlreadyRunning
 	}
@@ -246,6 +249,8 @@ func (s *scheduler) Run() error {
 	if s.store == nil {
 		return ErrNoStore
 	}
+
+	s.ctx = ctx
 
 	s.logInfo("scheduler starting", "instance", s.instanceID, "poll_interval", s.pollInterval, "misfire_threshold", s.misfireThreshold)
 

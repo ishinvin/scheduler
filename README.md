@@ -23,13 +23,13 @@ go get github.com/ishinvin/scheduler
 ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 defer stop()
 
-sched, err := scheduler.New(ctx, scheduler.WithMemory())
+sched, err := scheduler.New(scheduler.WithMemory())
 if err != nil {
     log.Fatal(err)
 }
 
 cronTrigger, _ := scheduler.NewCronTrigger("0 0 9 * * *")
-sched.Register(scheduler.Job{
+sched.Register(ctx, scheduler.Job{
     ID:      "daily-report",
     Name:    "Generate daily report",
     Trigger: cronTrigger,
@@ -40,17 +40,17 @@ sched.Register(scheduler.Job{
     },
 })
 
-log.Fatal(sched.Run())
+log.Fatal(sched.Run(ctx))
 ```
 
 For SQL-backed multi-instance usage:
 
 ```go
-sched, _ := scheduler.New(ctx,
+sched, _ := scheduler.New(
     scheduler.WithJDBC(db, "postgres", ""),
-    scheduler.WithInitializeSchema(),
     scheduler.WithInstanceID("worker-1"),
 )
+sched.InitSchema(ctx)
 ```
 
 ## Supported Databases
@@ -66,11 +66,12 @@ sched, _ := scheduler.New(ctx,
 ## API
 
 ```go
-sched.Register(job Job) error            // Add job (idempotent)
-sched.Reschedule(job Job) error          // Update trigger
-sched.Exists(id string) (bool, error)    // Check if job exists
-sched.Delete(id string) error            // Remove job
-sched.Run() error                        // Start scheduler (blocks)
+sched.InitSchema(ctx) error                   // Create tables (JDBC only)
+sched.Register(ctx, job Job) error            // Add job (idempotent)
+sched.Reschedule(ctx, job Job) error          // Update trigger
+sched.Exists(ctx, id string) (bool, error)    // Check if job exists
+sched.Delete(ctx, id string) error            // Remove job
+sched.Run(ctx) error                          // Start scheduler (blocks)
 ```
 
 ### Triggers
@@ -87,7 +88,6 @@ trigger := scheduler.NewOnceTrigger(time.Now().Add(5 * time.Minute)) // fire onc
 scheduler.WithMemory()                               // in-memory store
 scheduler.WithJDBC(db, "postgres", "")               // SQL store
 scheduler.WithCustomJDBC(db, dialect, "")             // custom dialect
-scheduler.WithInitializeSchema()                      // auto-create tables
 scheduler.WithLogger(logger)                          // custom *slog.Logger
 scheduler.WithVerbose()                               // enable info-level logs
 scheduler.WithInstanceID(id)                          // instance ID (default: hostname-pid)

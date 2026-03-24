@@ -15,14 +15,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	sched, err := scheduler.New(ctx, scheduler.WithMemory())
+	sched, err := scheduler.New(scheduler.WithMemory())
 	if err != nil {
 		log.Fatalf("init scheduler: %v", err)
 	}
 
 	// Cron trigger: every second, with a 10s execution timeout.
 	cronTrigger, _ := scheduler.NewCronTrigger("*/1 * * * * *")
-	sched.Register(scheduler.Job{
+	sched.Register(ctx, scheduler.Job{
 		ID:      "cron-job",
 		Name:    "Every 1s",
 		Trigger: cronTrigger,
@@ -35,7 +35,7 @@ func main() {
 
 	// Interval trigger: every 5 seconds.
 	intervalTrigger, _ := scheduler.NewIntervalTrigger(5 * time.Second)
-	sched.Register(scheduler.Job{
+	sched.Register(ctx, scheduler.Job{
 		ID:      "interval-job",
 		Name:    "Every 5s",
 		Trigger: intervalTrigger,
@@ -46,7 +46,7 @@ func main() {
 	})
 
 	// Once trigger: 10 seconds from now.
-	sched.Register(scheduler.Job{
+	sched.Register(ctx, scheduler.Job{
 		ID:      "once-job",
 		Name:    "Fire once",
 		Trigger: scheduler.NewOnceTrigger(time.Now().Add(10 * time.Second)),
@@ -61,12 +61,12 @@ func main() {
 		time.Sleep(15 * time.Second)
 		fmt.Println("rescheduling interval-job to every 2s...")
 		newTrigger, _ := scheduler.NewIntervalTrigger(2 * time.Second)
-		sched.Reschedule(scheduler.Job{ID: "interval-job", Trigger: newTrigger})
+		sched.Reschedule(ctx, scheduler.Job{ID: "interval-job", Trigger: newTrigger})
 	}()
 
 	// Start the scheduler. Blocks until the context is canceled.
 	fmt.Println("scheduler started (ctrl+c to stop)")
-	if err := sched.Run(); err != nil {
+	if err := sched.Run(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

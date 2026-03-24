@@ -45,11 +45,6 @@ func WithCustomJDBC(db *sql.DB, d dialect.Dialect, tablePrefix string) Option {
 	}
 }
 
-// WithInitializeSchema enables automatic table creation on startup for the JDBC store.
-func WithInitializeSchema() Option {
-	return func(sc *scheduler) { sc.initSchema = true }
-}
-
 // WithLogger sets a custom slog.Logger. Default is slog.Default().
 func WithLogger(logger *slog.Logger) Option {
 	return func(sc *scheduler) { sc.logger = logger }

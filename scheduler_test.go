@@ -20,9 +20,9 @@ func mustInterval(t *testing.T, d time.Duration) *scheduler.IntervalTrigger {
 	return tr
 }
 
-func newTestScheduler(t *testing.T, ctx context.Context) scheduler.Scheduler {
+func newTestScheduler(t *testing.T) scheduler.Scheduler {
 	t.Helper()
-	s, err := scheduler.New(ctx,
+	s, err := scheduler.New(
 		scheduler.WithMemory(),
 		scheduler.WithPollInterval(25*time.Millisecond),
 	)
@@ -34,7 +34,7 @@ func newTestScheduler(t *testing.T, ctx context.Context) scheduler.Scheduler {
 
 func TestRegisterAndExecute(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := newTestScheduler(t, ctx)
+	s := newTestScheduler(t)
 
 	var count atomic.Int32
 
@@ -48,16 +48,16 @@ func TestRegisterAndExecute(t *testing.T) {
 		},
 	}
 
-	if err := s.Register(job); err != nil {
+	if err := s.Register(ctx, job); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	// Duplicate registration should be idempotent (no error).
-	if err := s.Register(job); err != nil {
+	if err := s.Register(ctx, job); err != nil {
 		t.Fatalf("duplicate Register should be idempotent, got %v", err)
 	}
 
-	go func() { _ = s.Run() }()
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(200 * time.Millisecond)
 	cancel()
@@ -69,7 +69,7 @@ func TestRegisterAndExecute(t *testing.T) {
 
 func TestReschedule(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := newTestScheduler(t, ctx)
+	s := newTestScheduler(t)
 
 	var count atomic.Int32
 
@@ -83,17 +83,17 @@ func TestReschedule(t *testing.T) {
 		},
 	}
 
-	if err := s.Register(job); err != nil {
+	if err := s.Register(ctx, job); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	// Reschedule to fire fast.
-	err := s.Reschedule(scheduler.Job{ID: "resched-1", Trigger: mustInterval(t, 50*time.Millisecond)})
+	err := s.Reschedule(ctx, scheduler.Job{ID: "resched-1", Trigger: mustInterval(t, 50*time.Millisecond)})
 	if err != nil {
 		t.Fatalf("Reschedule: %v", err)
 	}
 
-	go func() { _ = s.Run() }()
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(200 * time.Millisecond)
 	cancel()
@@ -105,7 +105,7 @@ func TestReschedule(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := newTestScheduler(t, ctx)
+	s := newTestScheduler(t)
 
 	var count atomic.Int32
 
@@ -119,15 +119,15 @@ func TestDelete(t *testing.T) {
 		},
 	}
 
-	if err := s.Register(job); err != nil {
+	if err := s.Register(ctx, job); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	go func() { _ = s.Run() }()
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(150 * time.Millisecond)
 
-	if err := s.Delete("delete-1"); err != nil {
+	if err := s.Delete(ctx, "delete-1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
@@ -142,7 +142,7 @@ func TestDelete(t *testing.T) {
 	cancel()
 
 	// Delete non-existent job.
-	err := s.Delete("nonexistent")
+	err := s.Delete(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for deleting non-existent job")
 	}
@@ -150,7 +150,7 @@ func TestDelete(t *testing.T) {
 
 func TestOnceTrigger(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := newTestScheduler(t, ctx)
+	s := newTestScheduler(t)
 
 	var count atomic.Int32
 
@@ -164,11 +164,11 @@ func TestOnceTrigger(t *testing.T) {
 		},
 	}
 
-	if err := s.Register(job); err != nil {
+	if err := s.Register(ctx, job); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	go func() { _ = s.Run() }()
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(300 * time.Millisecond)
 	cancel()
@@ -180,7 +180,7 @@ func TestOnceTrigger(t *testing.T) {
 
 func TestHandlerRegistry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := newTestScheduler(t, ctx)
+	s := newTestScheduler(t)
 
 	var count atomic.Int32
 
@@ -194,11 +194,11 @@ func TestHandlerRegistry(t *testing.T) {
 		},
 	}
 
-	if err := s.Register(job); err != nil {
+	if err := s.Register(ctx, job); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	go func() { _ = s.Run() }()
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(200 * time.Millisecond)
 	cancel()
@@ -229,7 +229,7 @@ func TestIntervalTrigger(t *testing.T) {
 
 func TestRecoverStaleJobs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s, err := scheduler.New(ctx,
+	s, err := scheduler.New(
 		scheduler.WithMemory(),
 		scheduler.WithMisfireThreshold(100*time.Millisecond),
 		scheduler.WithPollInterval(25*time.Millisecond),
@@ -250,11 +250,11 @@ func TestRecoverStaleJobs(t *testing.T) {
 		},
 	}
 
-	if err := s.Register(job); err != nil {
+	if err := s.Register(ctx, job); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	go func() { _ = s.Run() }()
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(300 * time.Millisecond)
 	cancel()
@@ -266,7 +266,7 @@ func TestRecoverStaleJobs(t *testing.T) {
 
 func TestMultiInstanceNoDuplicate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s1, err := scheduler.New(ctx,
+	s1, err := scheduler.New(
 		scheduler.WithMemory(),
 		scheduler.WithInstanceID("instance-1"),
 		scheduler.WithPollInterval(25*time.Millisecond),
@@ -283,7 +283,7 @@ func TestMultiInstanceNoDuplicate(t *testing.T) {
 		return nil
 	}
 
-	if err := s1.Register(scheduler.Job{
+	if err := s1.Register(ctx, scheduler.Job{
 		ID:      "once-shared",
 		Name:    "shared once job",
 		Trigger: scheduler.NewOnceTrigger(time.Now().Add(50 * time.Millisecond)),
@@ -292,7 +292,7 @@ func TestMultiInstanceNoDuplicate(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	go func() { _ = s1.Run() }()
+	go func() { _ = s1.Run(ctx) }()
 
 	time.Sleep(400 * time.Millisecond)
 	cancel()
@@ -304,7 +304,7 @@ func TestMultiInstanceNoDuplicate(t *testing.T) {
 
 func TestMultiInstanceIntervalDistribution(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s, _ := scheduler.New(ctx,
+	s, _ := scheduler.New(
 		scheduler.WithMemory(),
 		scheduler.WithInstanceID("instance-1"),
 		scheduler.WithPollInterval(25*time.Millisecond),
@@ -312,7 +312,7 @@ func TestMultiInstanceIntervalDistribution(t *testing.T) {
 
 	var count atomic.Int32
 
-	if err := s.Register(scheduler.Job{
+	if err := s.Register(ctx, scheduler.Job{
 		ID:      "interval-shared",
 		Name:    "shared interval job",
 		Trigger: mustInterval(t, 50*time.Millisecond),
@@ -324,7 +324,7 @@ func TestMultiInstanceIntervalDistribution(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	go func() { _ = s.Run() }()
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(500 * time.Millisecond)
 	cancel()
@@ -336,33 +336,37 @@ func TestMultiInstanceIntervalDistribution(t *testing.T) {
 }
 
 func TestRescheduleCreatesIfNotFound(t *testing.T) {
-	s := newTestScheduler(t, context.Background())
-	err := s.Reschedule(scheduler.Job{ID: "new-job", Name: "new", Trigger: mustInterval(t, time.Second)})
+	ctx := context.Background()
+	s := newTestScheduler(t)
+	err := s.Reschedule(ctx, scheduler.Job{ID: "new-job", Name: "new", Trigger: mustInterval(t, time.Second)})
 	if err != nil {
 		t.Fatalf("expected Reschedule to create job, got %v", err)
 	}
 }
 
 func TestRegisterEmptyID(t *testing.T) {
-	s := newTestScheduler(t, context.Background())
-	err := s.Register(scheduler.Job{Name: "no id"})
+	ctx := context.Background()
+	s := newTestScheduler(t)
+	err := s.Register(ctx, scheduler.Job{Name: "no id"})
 	if err == nil {
 		t.Fatal("expected error for empty job ID")
 	}
 }
 
 func TestRegisterNegativeTimeout(t *testing.T) {
-	s := newTestScheduler(t, context.Background())
-	err := s.Register(scheduler.Job{ID: "neg-timeout", Timeout: -time.Second})
+	ctx := context.Background()
+	s := newTestScheduler(t)
+	err := s.Register(ctx, scheduler.Job{ID: "neg-timeout", Timeout: -time.Second})
 	if err == nil {
 		t.Fatal("expected error for negative timeout")
 	}
 }
 
 func TestRescheduleEmptyID(t *testing.T) {
-	s := newTestScheduler(t, context.Background())
+	ctx := context.Background()
+	s := newTestScheduler(t)
 	tr, _ := scheduler.NewIntervalTrigger(time.Second)
-	err := s.Reschedule(scheduler.Job{Trigger: tr})
+	err := s.Reschedule(ctx, scheduler.Job{Trigger: tr})
 	if err == nil {
 		t.Fatal("expected error for empty job ID on reschedule")
 	}
@@ -383,19 +387,21 @@ func TestNewIntervalTriggerNegativeReturnsError(t *testing.T) {
 }
 
 func TestRegisterNilFnAndNilTrigger(t *testing.T) {
-	s := newTestScheduler(t, context.Background())
-	err := s.Register(scheduler.Job{ID: "empty-job"})
+	ctx := context.Background()
+	s := newTestScheduler(t)
+	err := s.Register(ctx, scheduler.Job{ID: "empty-job"})
 	if !errors.Is(err, scheduler.ErrEmptyJob) {
 		t.Fatalf("expected ErrEmptyJob, got %v", err)
 	}
 }
 
 func TestRescheduleNoStore(t *testing.T) {
-	s, err := scheduler.New(context.Background())
+	ctx := context.Background()
+	s, err := scheduler.New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	err = s.Reschedule(scheduler.Job{
+	err = s.Reschedule(ctx, scheduler.Job{
 		ID:      "no-store",
 		Trigger: mustInterval(t, time.Second),
 		Fn:      func(_ context.Context) error { return nil },
@@ -408,12 +414,12 @@ func TestRescheduleNoStore(t *testing.T) {
 func TestDoubleRunReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := newTestScheduler(t, ctx)
+	s := newTestScheduler(t)
 
-	go func() { _ = s.Run() }()
+	go func() { _ = s.Run(ctx) }()
 	time.Sleep(25 * time.Millisecond) // let Run() acquire the lock
 
-	err := s.Run()
+	err := s.Run(ctx)
 	if !errors.Is(err, scheduler.ErrAlreadyRunning) {
 		t.Fatalf("expected ErrAlreadyRunning, got %v", err)
 	}
@@ -425,7 +431,7 @@ func TestOnErrorCallback(t *testing.T) {
 	var capturedID string
 	var capturedErr atomic.Value
 
-	s, err := scheduler.New(ctx,
+	s, err := scheduler.New(
 		scheduler.WithMemory(),
 		scheduler.WithPollInterval(25*time.Millisecond),
 		scheduler.WithOnError(func(jobID string, jobErr error) {
@@ -438,7 +444,7 @@ func TestOnErrorCallback(t *testing.T) {
 	}
 
 	jobErr := errors.New("test error")
-	if err := s.Register(scheduler.Job{
+	if err := s.Register(ctx, scheduler.Job{
 		ID:      "err-job",
 		Name:    "failing job",
 		Trigger: mustInterval(t, 50*time.Millisecond),
@@ -447,7 +453,7 @@ func TestOnErrorCallback(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	go func() { _ = s.Run() }()
+	go func() { _ = s.Run(ctx) }()
 
 	time.Sleep(200 * time.Millisecond)
 	cancel()
@@ -461,9 +467,10 @@ func TestOnErrorCallback(t *testing.T) {
 }
 
 func TestExists(t *testing.T) {
-	s := newTestScheduler(t, context.Background())
+	ctx := context.Background()
+	s := newTestScheduler(t)
 
-	if err := s.Register(scheduler.Job{
+	if err := s.Register(ctx, scheduler.Job{
 		ID:      "exists-1",
 		Name:    "test",
 		Trigger: mustInterval(t, time.Second),
@@ -472,7 +479,7 @@ func TestExists(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	ok, err := s.Exists("exists-1")
+	ok, err := s.Exists(ctx, "exists-1")
 	if err != nil {
 		t.Fatalf("Exists: %v", err)
 	}
@@ -480,7 +487,7 @@ func TestExists(t *testing.T) {
 		t.Fatal("expected job to exist")
 	}
 
-	ok, err = s.Exists("nonexistent")
+	ok, err = s.Exists(ctx, "nonexistent")
 	if err != nil {
 		t.Fatalf("Exists: %v", err)
 	}
@@ -490,16 +497,16 @@ func TestExists(t *testing.T) {
 }
 
 func TestExistsNoStore(t *testing.T) {
-	s, _ := scheduler.New(context.Background())
-	_, err := s.Exists("any")
+	s, _ := scheduler.New()
+	_, err := s.Exists(context.Background(), "any")
 	if !errors.Is(err, scheduler.ErrNoStore) {
 		t.Fatalf("expected ErrNoStore, got %v", err)
 	}
 }
 
 func TestDeleteNoStore(t *testing.T) {
-	s, _ := scheduler.New(context.Background())
-	err := s.Delete("any")
+	s, _ := scheduler.New()
+	err := s.Delete(context.Background(), "any")
 	if !errors.Is(err, scheduler.ErrNoStore) {
 		t.Fatalf("expected ErrNoStore, got %v", err)
 	}
@@ -507,8 +514,8 @@ func TestDeleteNoStore(t *testing.T) {
 
 func TestRegisterHandlerOnly(t *testing.T) {
 	// Handler-only registration (no Trigger) should succeed without a store.
-	s, _ := scheduler.New(context.Background())
-	err := s.Register(scheduler.Job{
+	s, _ := scheduler.New()
+	err := s.Register(context.Background(), scheduler.Job{
 		ID: "handler-only",
 		Fn: func(_ context.Context) error { return nil },
 	})
