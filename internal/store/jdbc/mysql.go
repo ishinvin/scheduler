@@ -15,10 +15,10 @@ func (MySQL) SchemaSQL(prefix string) string {
 	return `
 CREATE TABLE IF NOT EXISTS ` + p + `scheduler_jobs (
     job_id         VARCHAR(255) PRIMARY KEY,
-    name           VARCHAR(512) NOT NULL,
+    name           VARCHAR(255) NOT NULL,
     trigger_type   VARCHAR(32)  NOT NULL,
-    trigger_value  VARCHAR(512) NOT NULL,
-    timeout_secs   INT          NOT NULL DEFAULT 0,
+    trigger_value  VARCHAR(255) NOT NULL,
+    timeout_secs   INTEGER      NOT NULL DEFAULT 0,
     next_fire_time DATETIME(6),
     state          VARCHAR(32)  NOT NULL DEFAULT 'WAITING',
     instance_id    VARCHAR(255),

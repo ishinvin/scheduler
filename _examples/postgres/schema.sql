@@ -6,14 +6,14 @@
 -- and update the index names accordingly.
 
 CREATE TABLE IF NOT EXISTS scheduler_jobs (
-    job_id         TEXT        PRIMARY KEY,
-    name           TEXT        NOT NULL,
-    trigger_type   TEXT        NOT NULL,
-    trigger_value  TEXT        NOT NULL,
-    timeout_secs   INTEGER     NOT NULL DEFAULT 0,
+    job_id         VARCHAR(255) PRIMARY KEY,
+    name           VARCHAR(255) NOT NULL,
+    trigger_type   VARCHAR(32)  NOT NULL,
+    trigger_value  VARCHAR(255) NOT NULL,
+    timeout_secs   INTEGER      NOT NULL DEFAULT 0,
     next_fire_time TIMESTAMPTZ,
-    state          TEXT        NOT NULL DEFAULT 'WAITING',
-    instance_id    TEXT,
+    state          VARCHAR(32)  NOT NULL DEFAULT 'WAITING',
+    instance_id    VARCHAR(255),
     acquired_at    TIMESTAMPTZ,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
