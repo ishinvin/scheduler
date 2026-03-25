@@ -102,6 +102,10 @@ scheduler.WithOnError(func(jobID string, err error))  // error callback
 
 See [\_examples/](_examples/)
 
+## Acknowledgments
+
+- [robfig/cron](https://github.com/robfig/cron) — cron expression parsing and scheduling
+
 ## License
 
 MIT
