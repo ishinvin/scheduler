@@ -1,3 +1,5 @@
+.PHONY: tools hooks test lint e2e check setup up down clean logs
+
 # Install development tools
 tools:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1
@@ -17,6 +19,10 @@ lint:
 
 # Run lint and tests
 check: lint test
+
+# Run e2e tests (requires Docker)
+e2e:
+	cd test && go test -race -v -count=1 -timeout=10m ./...
 
 # Setup development environment
 setup: tools hooks

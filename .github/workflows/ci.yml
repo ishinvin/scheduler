@@ -29,3 +29,12 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
       - run: go test -race -v -count=1 ./...
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: test/go.mod
+      - run: cd test && go test -race -v -count=1 -timeout=10m ./...
